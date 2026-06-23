@@ -1,0 +1,24 @@
+{
+  "name": "kutumbkosh",
+  "private": true,
+  "version": "1.0.0",
+  "packageManager": "npm@10.8.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "admin:dev": "npm run dev --workspace=admin",
+    "admin:build": "npm run build --workspace=admin",
+    "db:push": "npm run db:push --workspace=admin",
+    "mobile": "npm run start --workspace=mobile",
+    "mobile:android": "npm run android --workspace=mobile",
+    "mobile:ios": "npm run ios --workspace=mobile"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.4"
+  }
+}
