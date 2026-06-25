@@ -3,6 +3,7 @@ import { db } from '../db';
 import { getPendingSyncRecords, markSynced } from '../db/crud';
 import { getDBUrl, getOrCreateDeviceId, decrypt, type CryptoKey } from '../crypto';
 import { useSyncStore } from '../store/syncStore';
+import { useAuthStore } from '../store/authStore';
 
 const ALL_TABLES = [
   'family_members', 'income_entries', 'expense_entries', 'bank_accounts',
@@ -101,11 +102,23 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
 
     await client.end();
 
+    // Pull remote changes (Delta Sync)
+    const cryptoKey = useAuthStore.getState().cryptoKey;
+    let pulledCount = 0;
+    if (cryptoKey) {
+      const pullRes = await pullFromRemote(dbUrl, cryptoKey);
+      if (pullRes.success) {
+        pulledCount = pullRes.count;
+      } else {
+        console.warn('[Sync] Pull from remote failed during bidirectional sync:', pullRes.error);
+      }
+    }
+
     // Update local sync log
     db.runSync(
-      `INSERT INTO sync_log (synced_at, sync_type, device_id, pushed_count, duration_ms)
-       VALUES (?, ?, ?, ?, ?)`,
-      [syncedAt, type, deviceId, totalPushed, Date.now() - startTime]
+      `INSERT INTO sync_log (synced_at, sync_type, device_id, pushed_count, pulled_count, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [syncedAt, type, deviceId, totalPushed, pulledCount, Date.now() - startTime]
     );
 
     syncStore.setLastSynced(syncedAt);
@@ -221,7 +234,7 @@ export async function setupRemoteDatabase(dbUrl: string): Promise<{ success: boo
   }
 }
 
-// Restore all data from Postgres to local SQLite (for new device / restore flow)
+// Pull and restore data from Postgres to local SQLite using a lastSyncedAt watermark (Delta Sync)
 export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ success: boolean; count: number; error?: string }> {
   if (Platform.OS === 'web') {
     console.log('[Web Sync Mock] Restore complete (no database restore on web).');
@@ -234,12 +247,40 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
 
     let restoreCount = 0;
 
+    // Get last sync time from sync_log SQLite table
+    let lastSyncedAt = '1970-01-01T00:00:00.000Z';
+    try {
+      const logRow = db.getFirstSync(
+        `SELECT synced_at FROM sync_log WHERE error IS NULL ORDER BY synced_at DESC LIMIT 1`
+      ) as { synced_at: string } | null;
+      if (logRow && logRow.synced_at) {
+        lastSyncedAt = logRow.synced_at;
+      }
+    } catch (e) {
+      console.log('Failed to fetch last sync time:', e);
+    }
+
     for (const table of ALL_TABLES) {
-      const res = await client.query(`SELECT local_id, iv, data, created_at, updated_at FROM kk_${table} WHERE deleted_at IS NULL`);
+      // Pull records updated since the last sync watermark.
+      // We pull both active and soft-deleted records so we can process deletes locally.
+      const res = await client.query(
+        `SELECT local_id, iv, data, created_at, updated_at, deleted_at FROM kk_${table} WHERE updated_at > $1`,
+        [lastSyncedAt]
+      );
       
       for (const row of res.rows) {
-        // Insert or replace into local SQLite
-        // First check if the local record exists, is pending, and the remote update is newer
+        // 1. Process soft deletes
+        if (row.deleted_at) {
+          db.runSync(
+            `UPDATE ${table} SET deleted_at = ?, sync_status = 'synced' WHERE local_id = ?`,
+            [row.deleted_at, row.local_id]
+          );
+          restoreCount++;
+          continue;
+        }
+
+        // 2. Insert or replace into local SQLite
+        // First check if the local record exists, is pending, and the remote update is newer (conflict)
         const localRecords = (await db.getAllSync(
           `SELECT sync_status, updated_at FROM ${table} WHERE local_id = ?`, [row.local_id]
         )) as { sync_status: string; updated_at: string }[];
@@ -281,10 +322,10 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
           }
         }
 
-        // We run a query to insert/replace
+        // 3. We run a query to insert/replace
         // We need to parse unencrypted index fields
         // Since we don't want to re-encrypt and change IV, we can just insert the exact iv and data we fetched
-        // Wait, index fields can be extracted by decrypting the data
+        // Index fields can be extracted by decrypting the data
         const recordObj = JSON.parse(await decrypt(key, { iv: row.iv, data: row.data }));
         
         let indexFields: Record<string, string | null> = {};

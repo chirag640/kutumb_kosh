@@ -13,8 +13,8 @@ export const adminUsers = pgTable('admin_users', {
   joinedAt:     timestamp('joined_at', { withTimezone: true }).defaultNow(),
   lastSeen:     timestamp('last_seen', { withTimezone: true }),
   appVersion:   text('app_version'),
-  // Encrypted master password — AES-256 with server CREDENTIAL_SECRET (for recovery only)
-  encryptedMasterPassword: text('encrypted_master_password'),
+  // Salted Bcrypt Hash of master password (for sync session authorization only, cannot be reversed/decrypted)
+  masterPasswordHash: text('master_password_hash'),
   // Encrypted DB URL — AES-256 with user's master-password-derived key (server cannot decrypt)
   encryptedDbUrl: text('encrypted_db_url'),
   // OTP for credential recovery — bcrypt-hashed, expires after 10 minutes

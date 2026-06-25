@@ -94,40 +94,38 @@ export async function sendWelcomeEmail(
 }
 
 /**
- * Sends recovered credentials after OTP verification.
- * The dbUrl may be null if the user never uploaded it from their device.
+ * Sends a recovery identity confirmation email (zero-knowledge style).
  */
-export async function sendRecoveryEmail(
-  user: { name: string; email: string },
-  masterPassword: string,
-  dbUrl: string | null
+export async function sendRecoveryConfirmationEmail(
+  user: { name: string; email: string }
 ): Promise<void> {
-  const dbSection = dbUrl
-    ? `<p style="margin: 0 0 8px; color: #868685; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: bold;">Database Connection URL</p>
-       <p style="font-family: monospace; font-size: 12px; font-weight: 600; color: #0e0f0c; margin: 0; background: #e8ebe6; padding: 12px; border-radius: 6px; word-break: break-all;">${dbUrl}</p>`
-    : `<p style="color: #868685; font-size: 12px; margin: 0;"><em>Your database URL could not be recovered — it may not have been uploaded yet from your device. You will need to re-enter it during setup.</em></p>`;
-
   const htmlContent = `
 <!DOCTYPE html>
 <html>
 <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #1f2937; background-color: #f9fafb;">
   <div style="background: #0e0f0c; padding: 24px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
     <h1 style="color: #9fe870; margin: 0; font-size: 26px; font-weight: 900; letter-spacing: -0.5px;">KutumbKosh</h1>
-    <p style="color: #e8ebe6; margin: 6px 0 0; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Credential Recovery</p>
+    <p style="color: #e8ebe6; margin: 6px 0 0; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px;">Security Notification</p>
   </div>
 
   <p>Hello <strong>${user.name}</strong>,</p>
-  <p>Your identity has been verified via OTP. Here are your recovered KutumbKosh credentials:</p>
+  <p>Your identity has been successfully verified via recovery OTP.</p>
 
-  <div style="background: #ffffff; border: 1px solid #e8ebe6; border-radius: 12px; padding: 24px; margin: 24px 0;">
-    <p style="margin: 0 0 8px; color: #868685; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: bold;">Master Password</p>
-    <p style="font-family: monospace; font-size: 22px; font-weight: 900; color: #0e0f0c; margin: 0 0 24px; letter-spacing: 2px; background: #e8ebe6; padding: 12px; border-radius: 6px; text-align: center;">${masterPassword}</p>
-    ${dbSection}
+  <div style="background: #ffffff; border: 1px solid #e8ebe6; border-radius: 12px; padding: 24px; margin: 24px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
+    <h3 style="color: #0e0f0c; margin-top: 0;">🔐 Zero-Knowledge Security Notice</h3>
+    <p style="line-height: 1.6; font-size: 14px;">
+      Because KutumbKosh implements a <strong>zero-knowledge architecture</strong>, your master password and private database credentials are encrypted and stored only on your local device. <strong>The KutumbKosh server does not store your master password</strong> and cannot recover it for you.
+    </p>
+    <p style="line-height: 1.6; font-size: 14px;">
+      To access your vault, please use the master password that was sent in your original <strong>Welcome Email</strong>, or refer to your physical backup sheet.
+    </p>
   </div>
 
   <div style="background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 16px; margin: 20px 0; font-size: 13px; color: #92400e;">
-    <p style="margin: 0; font-weight: bold;">⚠️ Security Notice</p>
-    <p style="margin: 8px 0 0;">Store these credentials safely and delete this email once saved. Open the app and use "Login on New Device" to re-enter your credentials and set a new PIN.</p>
+    <p style="margin: 0; font-weight: bold;">💡 Still have access to a logged-in device?</p>
+    <p style="margin: 8px 0 0; line-height: 1.5;">
+      If you are logged into the KutumbKosh app on any device, you can reveal your current master password by navigating to <strong>Settings &gt; Security &gt; Reveal Master Password</strong> and completing the biometric or PIN challenge.
+    </p>
   </div>
 
   <p style="color: #868685; font-size: 11px; border-top: 1px solid #e8ebe6; padding-top: 16px; margin-top: 24px;">
@@ -141,8 +139,7 @@ export async function sendRecoveryEmail(
     console.warn('================================================================');
     console.warn('⚠️  SMTP not configured — SMTP_USER or SMTP_PASS is missing in .env');
     console.warn(`   User:     ${user.email}`);
-    console.warn(`   Password: ${masterPassword}`);
-    console.warn(`   DB URL:   ${dbUrl ?? 'N/A'}`);
+    console.warn('   Action:   Zero-Knowledge Identity Verification Notification');
     console.warn('================================================================');
     return;
   }
@@ -151,12 +148,12 @@ export async function sendRecoveryEmail(
     const info = await createTransporter().sendMail({
       from: `"KutumbKosh Treasury" <${process.env.SMTP_USER}>`,
       to: user.email,
-      subject: 'KutumbKosh — Your Recovered Credentials',
+      subject: 'KutumbKosh — Identity Verified',
       html: htmlContent,
     });
-    console.log(`[email] Recovery email sent to ${user.email} — MessageID: ${info.messageId}`);
+    console.log(`[email] Security email sent to ${user.email} — MessageID: ${info.messageId}`);
   } catch (err: any) {
-    console.error(`[email] FAILED to send recovery email to ${user.email}:`, err.message);
-    throw new Error(`Recovery email delivery failed: ${err.message}`);
+    console.error(`[email] FAILED to send security email to ${user.email}:`, err.message);
+    throw new Error(`Security email delivery failed: ${err.message}`);
   }
 }

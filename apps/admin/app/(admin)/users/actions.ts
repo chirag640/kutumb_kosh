@@ -1,37 +1,37 @@
 'use server';
-
+ 
 import { db } from '@/lib/db';
 import { adminUsers, auditLog } from '@/lib/db/schema';
 import { generateMasterPassword, sendWelcomeEmail } from '@/lib/email/welcome';
-import { serverEncrypt, blobToString } from '@/lib/crypto';
 import { eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
-
+import bcrypt from 'bcryptjs';
+ 
 export async function approveUser(userId: string) {
   try {
     const [user] = await db.select().from(adminUsers).where(eq(adminUsers.id, userId));
     if (!user) {
       return { error: 'User not found' };
     }
-
-    // Generate master password and encrypt it for recovery storage
+ 
+    // Generate master password and hash it
     const masterPassword = generateMasterPassword();
-    const encryptedMasterPassword = blobToString(serverEncrypt(masterPassword));
-
+    const masterPasswordHash = await bcrypt.hash(masterPassword, 10);
+ 
     // 1. Persist to DB first — so credentials are safe even if email fails
     await db.update(adminUsers)
       .set({
         status: 'approved',
         approvedAt: new Date(),
-        encryptedMasterPassword,
+        masterPasswordHash,
       })
       .where(eq(adminUsers.id, userId));
-
+ 
     // 2. Audit log
     await db.insert(auditLog).values({
       action: 'approve',
       targetId: userId,
-      note: `Approved user ${user.email}. Master password encrypted and stored for recovery.`,
+      note: `Approved user ${user.email}. Master password hash stored.`,
     });
 
     revalidatePath('/users');
@@ -106,22 +106,20 @@ export async function resendCredentials(userId: string) {
       return { error: 'Credentials can only be resent for approved or suspended users.' };
     }
 
-    // Generate a fresh master password and encrypt it
+    // Generate a fresh master password and hash it
     const masterPassword = generateMasterPassword();
-    const encryptedMasterPassword = blobToString(serverEncrypt(masterPassword));
-
-    // 1. Update DB first — rotate the encrypted password and clear stored DB URL
-    //    (the DB URL was encrypted with the old master-password-derived key, so it
-    //     must be cleared — the user will re-enter it when they log in on their device)
+    const masterPasswordHash = await bcrypt.hash(masterPassword, 10);
+ 
+    // 1. Update DB first — rotate the hash and clear stored DB URL
     await db.update(adminUsers)
       .set({
-        encryptedMasterPassword,
+        masterPasswordHash,
         encryptedDbUrl: null,
         otpCode: null,
         otpExpiresAt: null,
       })
       .where(eq(adminUsers.id, userId));
-
+ 
     // 2. Audit log
     await db.insert(auditLog).values({
       action: 'resend_email',

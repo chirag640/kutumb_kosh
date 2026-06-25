@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,9 +9,10 @@ import {
   Alert 
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { useUIStore } from '../../../src/store/uiStore';
+import { db } from '../../../src/db';
 
 export default function SettingsIndexScreen() {
   const { lock, email } = useAuthStore();
@@ -25,6 +26,21 @@ export default function SettingsIndexScreen() {
     simpleMode, 
     setSimpleMode 
   } = useUIStore();
+
+  const [conflictCount, setConflictCount] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      try {
+        const res = db.getFirstSync(
+          `SELECT COUNT(*) as count FROM sync_conflicts WHERE resolved = 0`
+        ) as { count: number } | null;
+        setConflictCount(res?.count ?? 0);
+      } catch (e) {
+        console.log('Failed to fetch conflict count', e);
+      }
+    }, [])
+  );
 
   const handleLockApp = () => {
     Alert.alert('Lock Vault', 'Are you sure you want to lock the app? You will need your PIN or biometrics to unlock.', [
@@ -80,6 +96,19 @@ export default function SettingsIndexScreen() {
           <View style={styles.rowLeft}>
             <Ionicons name="sync" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <Text style={styles.rowLabel}>Cloud Backup & Sync</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={20} color="#868685" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/conflicts')}>
+          <View style={styles.rowLeft}>
+            <Ionicons name="git-compare" size={20} color="#0e0f0c" style={styles.rowIcon} />
+            <Text style={styles.rowLabel}>Conflict Resolution</Text>
+            {conflictCount > 0 && (
+              <View style={styles.badgeContainer}>
+                <Text style={styles.badgeText}>{conflictCount}</Text>
+              </View>
+            )}
           </View>
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
@@ -264,5 +293,19 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: 12,
+  },
+  badgeContainer: {
+    backgroundColor: '#d03238',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginLeft: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: '900',
   },
 });

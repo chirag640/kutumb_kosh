@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { useAuthStore } from '../src/store/authStore';
 import { initializeDB } from '../src/db';
-import { registerEODSync } from '../src/sync/scheduler';
+import { registerEODSync, scheduleAlertsIfNeeded } from '../src/sync/scheduler';
 import * as SecureStore from '../src/utils/secureStore';
+import * as Notifications from 'expo-notifications';
 import { ActivityIndicator, View, AppState, AppStateStatus } from 'react-native';
 
 export default function RootLayout() {
@@ -19,6 +20,27 @@ export default function RootLayout() {
       try {
         initializeDB();
         await registerEODSync();
+
+        // Configure foreground notifications
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowAlert: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+            shouldShowBanner: true,
+            shouldShowList: true,
+          }),
+        });
+
+        // Request notification permissions
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        if (existingStatus !== 'granted') {
+          await Notifications.requestPermissionsAsync();
+        }
+
+        // Run local offline alert scheduler
+        await scheduleAlertsIfNeeded().catch(err => console.log('Alert scheduling error:', err));
+
         const email = await SecureStore.getItemAsync('kk_email');
         if (email) {
           setHasAccount(true);

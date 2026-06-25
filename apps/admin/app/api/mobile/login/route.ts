@@ -2,15 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { adminUsers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
-import { serverDecrypt, stringToBlob } from '@/lib/crypto';
 import { signToken } from '@/lib/jwt';
 import { rateLimit } from '@/lib/rateLimit';
-
+import bcrypt from 'bcryptjs';
+ 
 /**
  * POST /api/mobile/login
  * Body: { email: string; masterPassword?: string }
  *
- * Verifies the master password against the server-decrypted stored credential,
+ * Verifies the master password against the server-stored bcrypt hash,
  * issues a JWT session token for future admin API authentications, and
  * returns the encrypted_db_url blob.
  */
@@ -26,65 +26,58 @@ export async function POST(req: NextRequest) {
         { status: 429 }
       );
     }
-
+ 
     const { email, masterPassword } = await req.json();
-
+ 
     if (!email || typeof email !== 'string') {
       return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
     }
-
+ 
     if (!masterPassword || typeof masterPassword !== 'string') {
       return NextResponse.json({ error: 'Master password is required.' }, { status: 400 });
     }
-
+ 
     const [user] = await db
       .select({
         id: adminUsers.id,
         email: adminUsers.email,
         status: adminUsers.status,
         encryptedDbUrl: adminUsers.encryptedDbUrl,
-        encryptedMasterPassword: adminUsers.encryptedMasterPassword,
+        masterPasswordHash: adminUsers.masterPasswordHash,
         name: adminUsers.name,
       })
       .from(adminUsers)
       .where(eq(adminUsers.email, email.toLowerCase().trim()));
-
+ 
     if (!user) {
       // Generic error to prevent email harvesting
       return NextResponse.json({ error: 'Invalid email or master password.' }, { status: 401 });
     }
-
+ 
     if (user.status === 'suspended') {
       return NextResponse.json(
         { error: 'Your account has been suspended by the administrator.' },
         { status: 403 }
       );
     }
-
+ 
     if (user.status !== 'approved') {
       return NextResponse.json(
         { error: 'Your account is not approved. Please contact the administrator.' },
         { status: 403 }
       );
     }
-
-    // Verify master password
-    if (!user.encryptedMasterPassword) {
+ 
+    // Verify master password hash
+    if (!user.masterPasswordHash) {
       return NextResponse.json(
         { error: 'Credentials not initialized. Please request admin to resend credentials.' },
         { status: 400 }
       );
     }
-
-    let decryptedMaster = '';
-    try {
-      decryptedMaster = serverDecrypt(stringToBlob(user.encryptedMasterPassword));
-    } catch (e) {
-      console.error('Failed to decrypt master password:', e);
-      return NextResponse.json({ error: 'Internal server encryption error.' }, { status: 500 });
-    }
-
-    if (decryptedMaster !== masterPassword.trim()) {
+ 
+    const isPasswordValid = await bcrypt.compare(masterPassword.trim(), user.masterPasswordHash);
+    if (!isPasswordValid) {
       return NextResponse.json({ error: 'Invalid email or master password.' }, { status: 401 });
     }
 

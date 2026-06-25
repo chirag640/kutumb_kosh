@@ -207,6 +207,7 @@ export default function OnboardingScreen() {
       // Store all credentials in SecureStore
       await SecureStore.setItemAsync('kk_email', email.trim().toLowerCase());
       await SecureStore.setItemAsync('kk_pin', pin);
+      await SecureStore.setItemAsync('kk_master_password', masterPassword.trim());
       await SecureStore.setItemAsync('kk_encrypted_master_key_pin', JSON.stringify(encryptedMasterKey));
       await SecureStore.setItemAsync('kk_master_key_biometric', masterKeyHex, {
         requireAuthentication: true,

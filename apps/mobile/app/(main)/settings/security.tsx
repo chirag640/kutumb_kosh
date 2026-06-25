@@ -7,10 +7,13 @@ import {
   TouchableOpacity, 
   TextInput, 
   Switch, 
-  ActivityIndicator 
+  ActivityIndicator,
+  Modal,
+  Platform
 } from 'react-native';
 import { showAlert } from '../../../src/utils/alert';
 const Alert = { alert: showAlert };
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as SecureStore from '../../../src/utils/secureStore';
@@ -30,6 +33,11 @@ export default function SecuritySettingsScreen() {
   const [oldPin, setOldPin] = useState('');
   const [newPin, setNewPin] = useState('');
   const [confirmNewPin, setConfirmNewPin] = useState('');
+
+  // Reveal master password states
+  const [revealModalVisible, setRevealModalVisible] = useState(false);
+  const [pinConfirmInput, setPinConfirmInput] = useState('');
+  const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
 
   useEffect(() => {
     checkBiometrics();
@@ -132,6 +140,68 @@ export default function SecuritySettingsScreen() {
       Alert.alert('Error', 'Failed to update PIN.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRevealPress = async () => {
+    // Attempt biometric authentication if enrolled
+    const hardware = await LocalAuthentication.hasHardwareAsync();
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    
+    if (hardware && enrolled) {
+      try {
+        const auth = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Authenticate to Reveal Master Password',
+        });
+        
+        if (auth.success) {
+          const pass = await SecureStore.getItemAsync('kk_master_password');
+          if (pass) {
+            setRevealedPassword(pass);
+            return;
+          } else {
+            Alert.alert('Error', 'Master password not found on this device.');
+          }
+        }
+      } catch (err) {
+        console.error('Biometric authentication failed:', err);
+      }
+    }
+    
+    // Fall back to PIN verification modal
+    setPinConfirmInput('');
+    setRevealModalVisible(true);
+  };
+
+  const handleVerifyPinAndReveal = async () => {
+    if (pinConfirmInput.length !== 6 || !/^\d+$/.test(pinConfirmInput)) {
+      Alert.alert('Invalid PIN', 'PIN must be exactly 6 digits.');
+      return;
+    }
+    
+    try {
+      const storedPin = await SecureStore.getItemAsync('kk_pin');
+      if (pinConfirmInput === storedPin) {
+        const pass = await SecureStore.getItemAsync('kk_master_password');
+        if (pass) {
+          setRevealedPassword(pass);
+          setRevealModalVisible(false);
+          setPinConfirmInput('');
+        } else {
+          Alert.alert('Error', 'Master password not found on this device.');
+        }
+      } else {
+        Alert.alert('Incorrect PIN', 'The unlock PIN you entered is incorrect.');
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to verify PIN.');
+    }
+  };
+
+  const handleCopyPassword = async () => {
+    if (revealedPassword) {
+      await Clipboard.setStringAsync(revealedPassword);
+      Alert.alert('Copied', 'Master password copied to clipboard.');
     }
   };
 
@@ -252,6 +322,81 @@ export default function SecuritySettingsScreen() {
           ))}
         </View>
       </View>
+
+      {/* Reveal Master Password Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Zero-Knowledge Backup</Text>
+        <Text style={styles.desc}>
+          Because KutumbKosh is zero-knowledge, the server cannot recover your password. Use this tool to reveal and write down your master password safely.
+        </Text>
+        
+        {revealedPassword ? (
+          <View style={styles.revealedContainer}>
+            <Text style={styles.revealedLabel}>Your Master Password:</Text>
+            <Text style={styles.revealedPass}>{revealedPassword}</Text>
+            <View style={styles.revealedActions}>
+              <TouchableOpacity style={styles.revealedBtn} onPress={handleCopyPassword}>
+                <Ionicons name="copy-outline" size={16} color="#0e0f0c" style={{ marginRight: 4 }} />
+                <Text style={styles.revealedBtnText}>Copy</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.revealedBtn, { borderColor: '#d03238' }]} onPress={() => setRevealedPassword(null)}>
+                <Ionicons name="eye-off-outline" size={16} color="#d03238" style={{ marginRight: 4 }} />
+                <Text style={[styles.revealedBtnText, { color: '#d03238' }]}>Hide</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.revealBtn} onPress={handleRevealPress}>
+            <Ionicons name="eye" size={20} color="#0e0f0c" style={{ marginRight: 8 }} />
+            <Text style={styles.revealBtnText}>Reveal Master Password</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* PIN Verification Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={revealModalVisible}
+        onRequestClose={() => setRevealModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Confirm security PIN</Text>
+            <Text style={styles.modalSub}>Enter your 6-digit Unlock PIN to reveal the master password:</Text>
+            
+            <TextInput
+              style={styles.modalInput}
+              placeholder="••••••"
+              placeholderTextColor="#868685"
+              keyboardType="numeric"
+              maxLength={6}
+              secureTextEntry
+              value={pinConfirmInput}
+              onChangeText={setPinConfirmInput}
+              autoFocus
+            />
+            
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, { borderColor: '#868685' }]} 
+                onPress={() => {
+                  setRevealModalVisible(false);
+                  setPinConfirmInput('');
+                }}
+              >
+                <Text style={[styles.modalBtnText, { color: '#868685' }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalBtn, { backgroundColor: '#9fe870', borderColor: '#0e0f0c' }]} 
+                onPress={handleVerifyPinAndReveal}
+              >
+                <Text style={[styles.modalBtnText, { color: '#0e0f0c' }]}>Verify</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -376,5 +521,134 @@ const styles = StyleSheet.create({
   },
   timeoutBtnTextActive: {
     color: '#0e0f0c',
+  },
+  revealedContainer: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#e8ebe6',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#0e0f0c',
+    alignItems: 'center',
+    width: '100%',
+  },
+  revealedLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#868685',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  revealedPass: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0e0f0c',
+    letterSpacing: 1.5,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    width: '100%',
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: '#e8ebe6',
+  },
+  revealedActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  revealedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    backgroundColor: '#ffffff',
+  },
+  revealedBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0e0f0c',
+  },
+  revealBtn: {
+    flexDirection: 'row',
+    backgroundColor: '#9fe870',
+    borderRadius: 9999,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+  },
+  revealBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0e0f0c',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+    padding: 20,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0e0f0c',
+    marginBottom: 8,
+  },
+  modalSub: {
+    fontSize: 12,
+    color: '#868685',
+    textAlign: 'center',
+    marginBottom: 16,
+    lineHeight: 18,
+  },
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 22,
+    textAlign: 'center',
+    letterSpacing: 6,
+    color: '#0e0f0c',
+    backgroundColor: '#ffffff',
+    width: '100%',
+    marginBottom: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalBtn: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  modalBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

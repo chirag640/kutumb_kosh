@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { adminUsers, auditLog } from '@/lib/db/schema';
-import { serverDecrypt, stringToBlob } from '@/lib/crypto';
-import { sendRecoveryEmail } from '@/lib/email/welcome';
+import { sendRecoveryConfirmationEmail } from '@/lib/email/welcome';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
@@ -13,11 +12,9 @@ import { rateLimit } from '@/lib/rateLimit';
  * Body: { email: string; otp: string }
  *
  * Verifies the 6-digit OTP (with expiry check), then:
- * 1. Decrypts the master password using the server CREDENTIAL_SECRET
- * 2. Decodes the encryptedDbUrl (sends as-is to email — user reads it manually,
- *    or we send the blob string so they can paste it; the server cannot decrypt it)
- * 3. Sends a recovery email with the master password + DB URL hint
- * 4. Clears the OTP from the DB
+ * 1. Sends a recovery confirmation email notifying the user that their identity is verified,
+ *    and directing them to check their existing device or setup sheet (zero-knowledge policy).
+ * 2. Clears the OTP from the DB
  */
 export async function POST(req: NextRequest) {
   try {
@@ -49,7 +46,6 @@ export async function POST(req: NextRequest) {
         status: adminUsers.status,
         otpCode: adminUsers.otpCode,
         otpExpiresAt: adminUsers.otpExpiresAt,
-        encryptedMasterPassword: adminUsers.encryptedMasterPassword,
         encryptedDbUrl: adminUsers.encryptedDbUrl,
       })
       .from(adminUsers)
@@ -78,32 +74,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid OTP. Please check and try again.' }, { status: 400 });
     }
 
-    // Decrypt master password
-    let masterPassword: string | null = null;
-    if (user.encryptedMasterPassword) {
-      try {
-        masterPassword = serverDecrypt(stringToBlob(user.encryptedMasterPassword));
-      } catch (e) {
-        console.error('Failed to decrypt master password:', e);
-      }
-    }
-
-    if (!masterPassword) {
-      return NextResponse.json(
-        { error: 'Credential recovery failed — encrypted data corrupted or missing. Contact administrator.' },
-        { status: 500 }
-      );
-    }
-
-    // The DB URL is client-encrypted — server cannot decrypt it.
-    // We send the raw encrypted blob in the email so the user can see it, but it's not useful without their key.
-    // Instead, we inform them the master password is what they need, and they can re-enter the DB URL.
-    // Note: encryptedDbUrl is opaque to the server, so we don't include it in recovery email.
-    await sendRecoveryEmail(
-      { name: user.name, email: normalizedEmail },
-      masterPassword,
-      null // Server cannot decrypt the DB URL — user must re-enter it
-    );
+    // Zero-knowledge recovery: we send a notification that verification was successful.
+    await sendRecoveryConfirmationEmail({ name: user.name, email: normalizedEmail });
 
     // Clear OTP after successful use
     await db
