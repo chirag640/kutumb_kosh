@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
   Dimensions
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Svg, Rect, Circle, Line, Path, G, Text as SvgText } from 'react-native-svg';
 import { useAuthStore } from '../../src/store/authStore';
@@ -49,9 +49,11 @@ export default function DashboardScreen() {
   const [categoryBreakdown, setCategoryBreakdown] = useState<Array<{ name: string; amount: number; color: string }>>([]);
   const [monthlyTrend, setMonthlyTrend] = useState<Array<{ month: string; income: number; expense: number }>>([]);
 
-  useEffect(() => {
-    loadDashboardData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboardData();
+    }, [cryptoKey])
+  );
 
   const loadDashboardData = async () => {
     if (!cryptoKey) return;

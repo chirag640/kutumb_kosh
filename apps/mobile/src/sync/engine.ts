@@ -51,25 +51,25 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
       const pending = await getPendingSyncRecords(table);
       if (pending.length === 0) continue;
 
-      const toUpsert = pending.filter(r => !r.deleted_at);
-      const toDelete = pending.filter(r => r.deleted_at).map(r => r.local_id);
+      const toUpsert = pending.filter((r: any) => !r.deleted_at);
+      const toDelete = pending.filter((r: any) => r.deleted_at).map((r: any) => r.local_id);
 
       // Upsert
       if (toUpsert.length > 0) {
         const indexFields = TABLE_INDEX_FIELDS[table] || [];
         for (const row of toUpsert) {
           const indexValues = indexFields.reduce<Record<string, unknown>>((acc, field) => {
-            const localRow = db.getFirstSync<Record<string, unknown>>(
+            const localRow = db.getFirstSync(
               `SELECT ${field} FROM ${table} WHERE local_id = ?`, [row.local_id]
-            );
+            ) as Record<string, unknown> | null;
             acc[field] = localRow?.[field] ?? null;
             return acc;
           }, {});
 
           const colList = ['local_id', 'iv', 'data', 'synced_at', ...indexFields];
-          const valPlaceholders = colList.map((_, i) => `$${i + 1}`).join(', ');
+          const valPlaceholders = colList.map((_: any, i: number) => `$${i + 1}`).join(', ');
           const updateSet = ['iv', 'data', 'synced_at', ...indexFields]
-            .map((c, i) => `${c} = $${i + 2}`).join(', ');
+            .map((c: any, i: number) => `${c} = $${i + 2}`).join(', ');
 
           await client.query(
             `INSERT INTO kk_${table} (${colList.join(', ')}) VALUES (${valPlaceholders})
@@ -77,13 +77,13 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
             [row.local_id, row.iv, row.data, syncedAt, ...indexFields.map(f => indexValues[f])]
           );
         }
-        markSynced(table, toUpsert.map(r => r.local_id));
+        markSynced(table, toUpsert.map((r: any) => r.local_id));
         totalPushed += toUpsert.length;
       }
 
       // Soft delete
       if (toDelete.length > 0) {
-        const placeholders = toDelete.map((_, i) => `$${i + 1}`).join(', ');
+        const placeholders = toDelete.map((_: any, i: number) => `$${i + 1}`).join(', ');
         await client.query(
           `UPDATE kk_${table} SET deleted_at = NOW() WHERE local_id IN (${placeholders})`,
           toDelete
@@ -239,10 +239,47 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
       
       for (const row of res.rows) {
         // Insert or replace into local SQLite
-        // First parse unencrypted fields for indexing if applicable
-        const decryptedRecord = await db.getAllSync<{ iv: string; data: string }>(
-          `SELECT local_id FROM ${table} WHERE local_id = ?`, [row.local_id]
-        );
+        // First check if the local record exists, is pending, and the remote update is newer
+        const localRecords = (await db.getAllSync(
+          `SELECT sync_status, updated_at FROM ${table} WHERE local_id = ?`, [row.local_id]
+        )) as { sync_status: string; updated_at: string }[];
+        const localRow = localRecords[0];
+
+        if (localRow && localRow.sync_status === 'pending') {
+          const localTime = new Date(localRow.updated_at).getTime();
+          const remoteTime = new Date(row.updated_at).getTime();
+
+          if (remoteTime > localTime) {
+            // Decrypt local record
+            const localDataEnc = (await db.getFirstSync(
+              `SELECT iv, data FROM ${table} WHERE local_id = ?`, [row.local_id]
+            )) as { iv: string; data: string } | null;
+
+            let localDecrypted = '{}';
+            if (localDataEnc) {
+              try {
+                localDecrypted = await decrypt(key, { iv: localDataEnc.iv, data: localDataEnc.data });
+              } catch (e) {
+                console.log('Failed decrypt local conflict', e);
+              }
+            }
+
+            let remoteDecrypted = '{}';
+            try {
+              remoteDecrypted = await decrypt(key, { iv: row.iv, data: row.data });
+            } catch (e) {
+              console.log('Failed decrypt remote conflict', e);
+            }
+
+            db.runSync(
+              `INSERT INTO sync_conflicts (table_name, local_id, local_data, remote_data, remote_iv, remote_data_enc, resolved)
+               VALUES (?, ?, ?, ?, ?, ?, 0)`,
+              [table, row.local_id, localDecrypted, remoteDecrypted, row.iv, row.data]
+            );
+
+            continue; // Skip overwriting local DB so user can resolve conflict
+          }
+        }
 
         // We run a query to insert/replace
         // We need to parse unencrypted index fields

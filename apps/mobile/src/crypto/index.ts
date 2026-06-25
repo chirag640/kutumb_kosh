@@ -9,6 +9,13 @@ const SALT_KEY = 'kk_salt_v1';
 const DB_URL_KEY = 'kk_db_url_v1';
 const DEVICE_ID_KEY = 'kk_device_id_v1';
 
+// ─── Global Salt (cross-device) ───────────────────────────────────────────────
+// A fixed salt used for the DB URL encryption that is uploaded to the server.
+// This must be the same on every device so the same master password always
+// produces the same key for encrypting/decrypting the server-stored DB URL blob.
+// This is NOT the salt used for local device encryption (which is device-specific).
+const GLOBAL_SALT_HEX = 'b9f1c3a72e4d6085af3b28c1e5f04792b6d3a8c7e2f0951483b7d6e4a5c9012f';
+
 export type CryptoKey = Uint8Array;
 
 // ─── Key Derivation ───────────────────────────────────────────────────────────
@@ -24,6 +31,19 @@ export async function getOrCreateSalt(): Promise<Uint8Array> {
 export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
   // Pure JavaScript PBKDF2 that runs perfectly on Hermes React Native
   return await pbkdf2Async(sha256, password, salt, {
+    c: 100_000,
+    dkLen: 32
+  });
+}
+
+/**
+ * Derives a deterministic key from the master password using the global salt.
+ * Used to encrypt the DB URL before uploading to the admin server, so the
+ * same master password can decrypt the blob on any device.
+ */
+export async function deriveLoginKey(masterPassword: string): Promise<CryptoKey> {
+  const globalSalt = Buffer.from(GLOBAL_SALT_HEX, 'hex');
+  return await pbkdf2Async(sha256, masterPassword, globalSalt, {
     c: 100_000,
     dkLen: 32
   });

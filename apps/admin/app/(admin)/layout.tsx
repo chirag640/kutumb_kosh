@@ -49,6 +49,13 @@ export default async function AdminLayout({
               <Users size={18} className="text-primary" />
               <span>User Approvals</span>
             </Link>
+            <Link
+              href="/audit-logs"
+              className="flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-semibold text-canvas-soft hover:bg-white/10 hover:text-canvas transition-all"
+            >
+              <ArrowLeftRight size={18} className="text-primary" />
+              <span>Audit Logs</span>
+            </Link>
           </nav>
         </div>
 

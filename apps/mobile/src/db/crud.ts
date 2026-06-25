@@ -73,18 +73,18 @@ export async function getAllRecords<T>(
   whereClause = '',
   params: (string | number)[] = []
 ): Promise<T[]> {
-  const rows = db.getAllSync<{ iv: string; data: string }>(
+  const rows = db.getAllSync(
     `SELECT iv, data FROM ${table} WHERE deleted_at IS NULL ${whereClause}`,
     params
-  );
-  return Promise.all(rows.map(row => decryptRecord<T>(key, { iv: row.iv, data: row.data })));
+  ) as { iv: string; data: string }[];
+  return Promise.all(rows.map((row: any) => decryptRecord<T>(key, { iv: row.iv, data: row.data })));
 }
 
 export async function getPendingSyncRecords(table: string) {
-  return db.getAllSync<{ local_id: string; iv: string; data: string; created_at: string; updated_at: string; deleted_at: string | null }>(
+  return db.getAllSync(
     `SELECT local_id, iv, data, created_at, updated_at, deleted_at
      FROM ${table} WHERE sync_status = 'pending'`
-  );
+  ) as { local_id: string; iv: string; data: string; created_at: string; updated_at: string; deleted_at: string | null }[];
 }
 
 export function markSynced(table: string, localIds: string[]): void {

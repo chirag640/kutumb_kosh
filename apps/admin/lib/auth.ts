@@ -1,6 +1,5 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
-import bcrypt from "bcryptjs";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -8,31 +7,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" }
+        password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
           return null;
         }
 
-        const rawEmail = process.env.ADMIN_EMAIL;
-        const rawPassword = process.env.ADMIN_PASSWORD || "admin123";
+        const adminEmail = process.env.ADMIN_EMAIL;
+        const adminPassword = process.env.ADMIN_PASSWORD;
 
-        if (!rawEmail) {
-          console.error("ADMIN_EMAIL is not set in environment variables");
+        if (!adminEmail || !adminPassword) {
+          console.error("[auth] ADMIN_EMAIL or ADMIN_PASSWORD env var is not set.");
           return null;
         }
 
-        const adminEmail = rawEmail.replace(/^['"]|['"]$/g, '');
-        const adminPassword = rawPassword.replace(/^['"]|['"]$/g, '');
-
         if (credentials.email !== adminEmail) {
-          console.warn(`Admin login failed: Email mismatch. Expected: "${adminEmail}", got: "${credentials.email}"`);
+          console.warn("[auth] Login failed: email mismatch.");
           return null;
         }
 
         if (credentials.password !== adminPassword) {
-          console.warn(`Admin login failed: Password mismatch for ${adminEmail}.`);
+          console.warn(`[auth] Login failed: password mismatch for ${adminEmail}.`);
           return null;
         }
 
@@ -42,8 +38,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: "Administrator",
           role: "admin",
         };
-      }
-    })
+      },
+    }),
   ],
   pages: {
     signIn: "/login",
@@ -60,7 +56,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         (session.user as any).role = token.role;
       }
       return session;
-    }
+    },
   },
   secret: process.env.NEXTAUTH_SECRET,
 });

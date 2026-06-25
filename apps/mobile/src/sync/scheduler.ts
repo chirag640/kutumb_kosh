@@ -1,25 +1,43 @@
+import { Platform } from 'react-native';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 import { performSync } from './engine';
+import { db } from '../db';
 
 const EOD_SYNC_TASK = 'KK_EOD_SYNC';
 
 TaskManager.defineTask(EOD_SYNC_TASK, async () => {
-  const now = new Date();
-  const hour = now.getHours();
-  const minute = now.getMinutes();
+  try {
+    const todayStr = new Date().toISOString().split('T')[0]; // "YYYY-MM-DD"
+    
+    // Check if there was any successful sync today
+    const lastSync = db.getFirstSync(
+      `SELECT synced_at FROM sync_log 
+       WHERE error IS NULL 
+       ORDER BY id DESC LIMIT 1`
+    ) as { synced_at: string } | null;
 
-  // Only fire between 23:45 and 23:59
-  if (hour === 23 && minute >= 45) {
+    if (lastSync) {
+      const lastSyncDate = lastSync.synced_at.split('T')[0];
+      if (lastSyncDate === todayStr) {
+        // Already synced today, no need to run again
+        return BackgroundFetch.BackgroundFetchResult.NoData;
+      }
+    }
+
+    // Run the sync since it hasn't run today
     const result = await performSync('scheduled');
     return result.success
       ? BackgroundFetch.BackgroundFetchResult.NewData
       : BackgroundFetch.BackgroundFetchResult.Failed;
+  } catch (error) {
+    console.error('Error during scheduled background sync task:', error);
+    return BackgroundFetch.BackgroundFetchResult.Failed;
   }
-  return BackgroundFetch.BackgroundFetchResult.NoData;
 });
 
 export async function registerEODSync(): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     const status = await BackgroundFetch.getStatusAsync();
     if (status === BackgroundFetch.BackgroundFetchStatus.Restricted ||

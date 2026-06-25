@@ -117,7 +117,7 @@ export default async function DashboardPage() {
             <div className="p-4 bg-canvas-soft rounded-lg space-y-2">
               <h4 className="font-bold text-sm">Approving a User</h4>
               <p className="text-xs text-body leading-relaxed">
-                When you approve a user registration, KutumbKosh automatically runs a secure welcome email trigger via Resend. The welcome email contains a newly derived master password.
+                When you approve a user registration, KutumbKosh automatically runs a secure welcome email trigger via SMTP. The welcome email contains a newly derived master password.
               </p>
             </div>
 

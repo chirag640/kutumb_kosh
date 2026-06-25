@@ -105,6 +105,7 @@ export default function ExportSettingsScreen() {
     setLoading(true);
 
     try {
+      // @ts-ignore
       const { jsPDF } = await import('jspdf/dist/jspdf.es.min.js');
 
       // 1. Fetch data

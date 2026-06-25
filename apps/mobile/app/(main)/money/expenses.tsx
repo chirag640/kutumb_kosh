@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -11,7 +11,7 @@ import {
   Alert, 
   ActivityIndicator 
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
@@ -44,9 +44,11 @@ export default function ExpensesScreen() {
   const [monthlyLimit, setMonthlyLimit] = useState(25000); // Default or load from app_settings
   const [monthlySpent, setMonthlySpent] = useState(0);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [cryptoKey])
+  );
 
   const loadData = async () => {
     if (!cryptoKey) return;

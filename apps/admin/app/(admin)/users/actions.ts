@@ -2,7 +2,8 @@
 
 import { db } from '@/lib/db';
 import { adminUsers, auditLog } from '@/lib/db/schema';
-import { sendWelcomeEmail } from '@/lib/email/welcome';
+import { generateMasterPassword, sendWelcomeEmail } from '@/lib/email/welcome';
+import { serverEncrypt, blobToString } from '@/lib/crypto';
 import { eq } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 
@@ -13,28 +14,47 @@ export async function approveUser(userId: string) {
       return { error: 'User not found' };
     }
 
-    // Send email FIRST (master password generated here, used once, never stored)
-    const emailRes = await sendWelcomeEmail({ 
-      name: user.name, 
-      email: user.email, 
-      familyName: user.familyName ?? undefined 
-    });
+    // Generate master password and encrypt it for recovery storage
+    const masterPassword = generateMasterPassword();
+    const encryptedMasterPassword = blobToString(serverEncrypt(masterPassword));
 
-    // Update status
+    // 1. Persist to DB first — so credentials are safe even if email fails
     await db.update(adminUsers)
-      .set({ status: 'approved', approvedAt: new Date() })
+      .set({
+        status: 'approved',
+        approvedAt: new Date(),
+        encryptedMasterPassword,
+      })
       .where(eq(adminUsers.id, userId));
 
-    // Audit log
-    await db.insert(auditLog).values({ 
-      action: 'approve', 
+    // 2. Audit log
+    await db.insert(auditLog).values({
+      action: 'approve',
       targetId: userId,
-      note: `Approved user with email ${user.email}`
+      note: `Approved user ${user.email}. Master password encrypted and stored for recovery.`,
     });
 
     revalidatePath('/users');
     revalidatePath('/dashboard');
-    return { success: true, masterPassword: emailRes.masterPassword, emailId: emailRes.emailId };
+
+    // 3. Send welcome email — non-fatal: credentials are already saved in DB
+    try {
+      await sendWelcomeEmail(
+        { name: user.name, email: user.email, familyName: user.familyName ?? undefined },
+        masterPassword
+      );
+    } catch (emailErr: any) {
+      console.error('[approveUser] Email failed but user is approved:', emailErr.message);
+      // Return success with a warning so the admin can manually share the password
+      return {
+        success: true,
+        masterPassword,
+        emailId: user.email,
+        emailWarning: `User approved, but email delivery failed: ${emailErr.message}`,
+      };
+    }
+
+    return { success: true, masterPassword, emailId: user.email };
   } catch (error: any) {
     console.error('approveUser action failed:', error);
     return { error: error.message || 'Failed to approve user and send welcome credentials.' };
@@ -44,10 +64,10 @@ export async function approveUser(userId: string) {
 export async function rejectUser(userId: string) {
   try {
     await db.update(adminUsers).set({ status: 'rejected' }).where(eq(adminUsers.id, userId));
-    await db.insert(auditLog).values({ 
-      action: 'reject', 
+    await db.insert(auditLog).values({
+      action: 'reject',
       targetId: userId,
-      note: `Rejected user`
+      note: `Rejected user`,
     });
     revalidatePath('/users');
     revalidatePath('/dashboard');
@@ -73,5 +93,91 @@ export async function registerUser(data: {
   } catch (error: any) {
     console.error('registerUser action failed:', error);
     return { error: error.message || 'Failed to record registration request.' };
+  }
+}
+
+export async function resendCredentials(userId: string) {
+  try {
+    const [user] = await db.select().from(adminUsers).where(eq(adminUsers.id, userId));
+    if (!user) {
+      return { error: 'User not found' };
+    }
+    if (user.status !== 'approved' && user.status !== 'suspended') {
+      return { error: 'Credentials can only be resent for approved or suspended users.' };
+    }
+
+    // Generate a fresh master password and encrypt it
+    const masterPassword = generateMasterPassword();
+    const encryptedMasterPassword = blobToString(serverEncrypt(masterPassword));
+
+    // 1. Update DB first — rotate the encrypted password and clear stored DB URL
+    //    (the DB URL was encrypted with the old master-password-derived key, so it
+    //     must be cleared — the user will re-enter it when they log in on their device)
+    await db.update(adminUsers)
+      .set({
+        encryptedMasterPassword,
+        encryptedDbUrl: null,
+        otpCode: null,
+        otpExpiresAt: null,
+      })
+      .where(eq(adminUsers.id, userId));
+
+    // 2. Audit log
+    await db.insert(auditLog).values({
+      action: 'resend_email',
+      targetId: userId,
+      note: `Regenerated master password and resent welcome email to ${user.email}. Encrypted DB URL cleared as security measure.`,
+    });
+
+    revalidatePath('/users');
+    revalidatePath('/dashboard');
+
+    // 3. Send email — non-fatal: credentials are already rotated in DB
+    try {
+      await sendWelcomeEmail(
+        { name: user.name, email: user.email, familyName: user.familyName ?? undefined },
+        masterPassword
+      );
+    } catch (emailErr: any) {
+      console.error('[resendCredentials] Email failed but credentials were rotated:', emailErr.message);
+      return {
+        success: true,
+        masterPassword,
+        emailWarning: `Credentials rotated, but email delivery failed: ${emailErr.message}`,
+      };
+    }
+
+    return { success: true, masterPassword };
+  } catch (error: any) {
+    console.error('resendCredentials action failed:', error);
+    return { error: error.message || 'Failed to resend credentials.' };
+  }
+}
+
+export async function toggleUserSuspension(userId: string) {
+  try {
+    const [user] = await db.select().from(adminUsers).where(eq(adminUsers.id, userId));
+    if (!user) {
+      return { error: 'User not found' };
+    }
+
+    const newStatus = user.status === 'suspended' ? 'approved' : 'suspended';
+
+    await db.update(adminUsers)
+      .set({ status: newStatus })
+      .where(eq(adminUsers.id, userId));
+
+    await db.insert(auditLog).values({
+      action: newStatus === 'suspended' ? 'suspend' : 'unsuspend',
+      targetId: userId,
+      note: `${newStatus === 'suspended' ? 'Suspended' : 'Unsuspended'} user account for ${user.email}.`,
+    });
+
+    revalidatePath('/users');
+    revalidatePath('/dashboard');
+    return { success: true, status: newStatus };
+  } catch (error: any) {
+    console.error('toggleUserSuspension action failed:', error);
+    return { error: error.message || 'Failed to change suspension state.' };
   }
 }

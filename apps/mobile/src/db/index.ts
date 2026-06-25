@@ -166,6 +166,19 @@ export function initializeDB(): void {
   `);
 
   db.execSync(`
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name      TEXT NOT NULL,
+      local_id        TEXT NOT NULL,
+      local_data      TEXT NOT NULL,
+      remote_data     TEXT NOT NULL,
+      remote_iv       TEXT NOT NULL,
+      remote_data_enc TEXT NOT NULL,
+      resolved        INTEGER DEFAULT 0
+    );
+  `);
+
+  db.execSync(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL

@@ -24,6 +24,7 @@ export default function SecuritySettingsScreen() {
   const [loading, setLoading] = useState(false);
   const [biometricsEnabled, setBiometricsEnabled] = useState(false);
   const [hasHardware, setHasHardware] = useState(false);
+  const [lockTimeout, setLockTimeout] = useState(0);
 
   // Form states
   const [oldPin, setOldPin] = useState('');
@@ -32,7 +33,19 @@ export default function SecuritySettingsScreen() {
 
   useEffect(() => {
     checkBiometrics();
+    loadLockTimeout();
   }, []);
+
+  const loadLockTimeout = async () => {
+    const val = await SecureStore.getItemAsync('kk_lock_timeout') ?? '0';
+    setLockTimeout(parseInt(val, 10));
+  };
+
+  const handleSelectTimeout = async (timeoutMs: number) => {
+    setLockTimeout(timeoutMs);
+    await SecureStore.setItemAsync('kk_lock_timeout', String(timeoutMs));
+    Alert.alert('Success', 'Lock timeout updated successfully.');
+  };
 
   const checkBiometrics = async () => {
     const hardware = await LocalAuthentication.hasHardwareAsync();
@@ -206,6 +219,39 @@ export default function SecuritySettingsScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Lock Timeout Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Auto-Lock Timeout</Text>
+        <Text style={styles.desc}>Choose how long the app can stay in the background before requiring your PIN again.</Text>
+        
+        <View style={styles.timeoutGrid}>
+          {[
+            { label: 'Immediate', value: 0 },
+            { label: '1 Min', value: 60000 },
+            { label: '3 Min', value: 180000 },
+            { label: '5 Min', value: 300000 },
+            { label: '10 Min', value: 600000 },
+            { label: 'Never', value: -1 },
+          ].map((opt) => (
+            <TouchableOpacity
+              key={opt.value}
+              style={[
+                styles.timeoutBtn,
+                lockTimeout === opt.value && styles.timeoutBtnActive
+              ]}
+              onPress={() => handleSelectTimeout(opt.value)}
+            >
+              <Text style={[
+                styles.timeoutBtnText,
+                lockTimeout === opt.value && styles.timeoutBtnTextActive
+              ]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
     </ScrollView>
   );
 }
@@ -301,6 +347,34 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 15,
     fontWeight: '700',
+    color: '#0e0f0c',
+  },
+  timeoutGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  timeoutBtn: {
+    flex: 1,
+    flexBasis: '30%',
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    marginBottom: 4,
+  },
+  timeoutBtnActive: {
+    backgroundColor: '#9fe870',
+  },
+  timeoutBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0e0f0c',
+  },
+  timeoutBtnTextActive: {
     color: '#0e0f0c',
   },
 });

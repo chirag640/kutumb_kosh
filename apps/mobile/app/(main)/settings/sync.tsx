@@ -27,6 +27,7 @@ export default function SyncSettingsScreen() {
   const [dbUrl, setDbUrl] = useState('');
   const [dbLoading, setDbLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [conflictCount, setConflictCount] = useState(0);
   const [autoSync, setAutoSync] = useState(true);
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function SyncSettingsScreen() {
 
     if (Platform.OS === 'web') {
       setPendingCount(0);
+      setConflictCount(0);
       return;
     }
 
@@ -51,12 +53,17 @@ export default function SyncSettingsScreen() {
     let totalPending = 0;
     try {
       tables.forEach(table => {
-        const row = db.getFirstSync<{ count: number }>(
+        const row = db.getFirstSync(
           `SELECT COUNT(*) as count FROM ${table} WHERE sync_status = 'pending'`
-        );
+        ) as { count: number } | null;
         if (row) totalPending += row.count;
       });
       setPendingCount(totalPending);
+
+      const conflictRow = db.getFirstSync(
+        `SELECT COUNT(*) as count FROM sync_conflicts WHERE resolved = 0`
+      ) as { count: number } | null;
+      if (conflictRow) setConflictCount(conflictRow.count);
     } catch (err) {
       console.log('Error counting pending syncs', err);
     }
@@ -227,6 +234,16 @@ export default function SyncSettingsScreen() {
             thumbColor={autoSync ? '#0e0f0c' : '#ffffff'}
           />
         </View>
+
+        {conflictCount > 0 && (
+          <TouchableOpacity 
+            style={[styles.restoreBtn, { borderColor: '#ffd11a', backgroundColor: '#fffbeb', marginBottom: 12 }]} 
+            onPress={() => router.push('/settings/conflicts')}
+          >
+            <Ionicons name="git-compare-outline" size={18} color="#0e0f0c" style={{ marginRight: 8 }} />
+            <Text style={styles.restoreBtnText}>Resolve {conflictCount} Conflicts</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={styles.restoreBtn} onPress={handleRestore}>
           <Ionicons name="cloud-download-outline" size={18} color="#0e0f0c" style={{ marginRight: 8 }} />

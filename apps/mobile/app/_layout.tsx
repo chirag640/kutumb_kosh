@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { useAuthStore } from '../src/store/authStore';
 import { initializeDB } from '../src/db';
+import { registerEODSync } from '../src/sync/scheduler';
 import * as SecureStore from '../src/utils/secureStore';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, View, AppState, AppStateStatus } from 'react-native';
 
 export default function RootLayout() {
   const isUnlocked = useAuthStore(s => s.isUnlocked);
@@ -17,6 +18,7 @@ export default function RootLayout() {
     async function prepare() {
       try {
         initializeDB();
+        await registerEODSync();
         const email = await SecureStore.getItemAsync('kk_email');
         if (email) {
           setHasAccount(true);
@@ -29,6 +31,40 @@ export default function RootLayout() {
       }
     }
     prepare();
+  }, []);
+
+  // Background Lock Timeout Listener
+  useEffect(() => {
+    let backgroundTimestamp = 0;
+
+    const handleAppStateChange = async (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'background') {
+        backgroundTimestamp = Date.now();
+      } else if (nextAppState === 'active') {
+        const auth = useAuthStore.getState();
+        if (auth.isUnlocked && backgroundTimestamp > 0) {
+          const timeoutStr = await SecureStore.getItemAsync('kk_lock_timeout') ?? '0';
+          const timeoutMs = parseInt(timeoutStr, 10);
+
+          if (timeoutMs === -1) {
+            // "Never" lock on background
+            backgroundTimestamp = 0;
+            return;
+          }
+
+          const elapsed = Date.now() - backgroundTimestamp;
+          if (elapsed > timeoutMs) {
+            auth.lock();
+          }
+        }
+        backgroundTimestamp = 0;
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   useEffect(() => {

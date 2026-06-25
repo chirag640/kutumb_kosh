@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -33,9 +33,11 @@ export default function FamilyMembersScreen() {
   const [bloodGroup, setBloodGroup] = useState('A+');
   const [notes, setNotes] = useState('');
 
-  useEffect(() => {
-    loadMembers();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadMembers();
+    }, [cryptoKey])
+  );
 
   const loadMembers = async () => {
     if (!cryptoKey) return;
@@ -278,7 +280,7 @@ export default function FamilyMembersScreen() {
   );
 }
 
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 const styles = StyleSheet.create({
   container: {

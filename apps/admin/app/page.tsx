@@ -9,7 +9,7 @@ export default function Home() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [familyName, setFamilyName] = useState("");
-  const [memberCount, setMemberCount] = useState(5);
+  const [memberCount, setMemberCount] = useState(4);
   const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -208,7 +208,10 @@ export default function Home() {
                         value={memberCount}
                         onChange={(e) => setMemberCount(Number(e.target.value))}
                         disabled={status === "submitting"}
-                        className="flex-1 accent-ink cursor-pointer h-2 bg-canvas-soft rounded-lg appearance-none"
+                        className="flex-1 kk-range-slider"
+                        style={{
+                          background: `linear-gradient(to right, #0e0f0c 0%, #0e0f0c ${((memberCount - 1) / 19) * 100}%, #e8ebe6 ${((memberCount - 1) / 19) * 100}%, #e8ebe6 100%)`
+                        }}
                       />
                     </div>
                   </div>

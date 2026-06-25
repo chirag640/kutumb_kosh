@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { adminUsers } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { UsersTable } from "./UsersTable";
+import { isSmtpConfigured } from "@/lib/email/welcome";
 
 export const revalidate = 0; // Ensure fresh listings on load
 
@@ -18,6 +19,8 @@ export default async function UsersPage() {
     console.error("Failed to query users from Database:", error);
   }
 
+  const smtpOk = isSmtpConfigured();
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -27,7 +30,7 @@ export default async function UsersPage() {
         </p>
       </div>
 
-      <UsersTable initialUsers={users} />
+      <UsersTable initialUsers={users} isSmtpConfigured={smtpOk} />
     </div>
   );
 }

@@ -250,6 +250,13 @@ export default function LockScreen() {
                 <Text style={styles.biometricText}>Unlock with Face ID / Fingerprint</Text>
               </TouchableOpacity>
             )}
+
+            <TouchableOpacity
+              style={styles.forgotBtn}
+              onPress={() => router.push('/(auth)/recover')}
+            >
+              <Text style={styles.forgotText}>Forgot credentials?</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -371,5 +378,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontSize: 14,
     textDecorationLine: 'underline',
+  },
+  forgotBtn: {
+    marginTop: 24,
+    padding: 8,
+  },
+  forgotText: {
+    color: '#868685',
+    fontWeight: '500',
+    fontSize: 13,
+    textDecorationLine: 'underline',
+    textAlign: 'center',
   },
 });
