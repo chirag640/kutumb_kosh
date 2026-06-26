@@ -150,7 +150,7 @@ export default function BanksScreen() {
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.bankName}>{item.bankName}</Text>
-                  <Text style={styles.typeText}>{item.accountType} — **** {item.last4Digits}</Text>
+                  <Text style={styles.typeText}>{item.accountType} — Account No: {item.last4Digits}</Text>
                 </View>
                 <AmountDisplay amount={item.balance} color="#0e0f0c" size={18} />
               </View>
@@ -228,13 +228,12 @@ export default function BanksScreen() {
                 ))}
               </View>
 
-              <Text style={styles.label}>Last 4 Digits</Text>
+              <Text style={styles.label}>Account Number</Text>
               <TextInput
                 style={styles.input}
-                placeholder="1234"
+                placeholder="e.g. 123456789012"
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
-                maxLength={4}
                 value={last4Digits}
                 onChangeText={setLast4Digits}
               />

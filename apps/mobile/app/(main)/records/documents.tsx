@@ -14,12 +14,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import * as LocalAuthentication from 'expo-local-authentication';
-import * as SecureStore from '../../../src/utils/secureStore';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
-import { calcDaysRemaining, maskDocNumber } from '../../../src/utils/calculations';
+import { calcDaysRemaining } from '../../../src/utils/calculations';
 import type { ImportantDocument, FamilyMember } from '@kutumbkosh/shared';
 
 const TYPES = ['Aadhaar', 'PAN', 'Passport', 'Driving License', 'Vehicle RC', 'Ration Card', 'Voter ID', 'Birth Certificate', 'Marriage Certificate', 'Other'];
@@ -106,44 +104,11 @@ export default function DocumentsScreen() {
   };
 
   const handleReveal = async (doc: ImportantDocument) => {
-    const hasBiometrics = await LocalAuthentication.hasHardwareAsync();
-    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
-
-    if (!hasBiometrics || !isEnrolled) {
-      // Prompt for PIN instead
-      Alert.prompt(
-        'Enter Lock PIN',
-        'Enter your 6-digit lock PIN to reveal the document number.',
-        async (pinText) => {
-          const storedPin = await SecureStore.getItemAsync('kk_pin');
-          if (pinText === storedPin) {
-            Alert.alert(`Document Details`, `Number: ${doc.documentNumber}`);
-          } else {
-            Alert.alert('Invalid PIN', 'Authentication failed.');
-          }
-        },
-        'secure-text'
-      );
-      return;
-    }
-
     try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: `Authenticate to reveal ${doc.documentType}`,
-      });
-
-      if (result.success) {
-        Alert.alert(
-          `${doc.documentType} Number`,
-          `Owner: ${getMemberName(doc.holderMemberId)}\nNumber: ${doc.documentNumber}`,
-          [
-            { text: 'Copy', onPress: () => Clipboard.setStringAsync(doc.documentNumber) },
-            { text: 'Close', style: 'cancel' }
-          ]
-        );
-      }
+      await Clipboard.setStringAsync(doc.documentNumber);
+      Alert.alert('Copied', `${doc.documentType} number copied to clipboard!`);
     } catch (e) {
-      Alert.alert('Error', 'Authentication failed');
+      Alert.alert('Error', 'Failed to copy to clipboard');
     }
   };
 
@@ -193,7 +158,7 @@ export default function DocumentsScreen() {
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.infoBar}>Long press a card to authenticate and reveal/copy document numbers.</Text>
+      <Text style={styles.infoBar}>Tap a card to copy the document number. Long press to delete.</Text>
 
       {loading && documents.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -227,7 +192,7 @@ export default function DocumentsScreen() {
 
                 <Text style={styles.docType} numberOfLines={1}>{item.documentType}</Text>
                 <Text style={styles.holder} numberOfLines={1}>Holder: {getMemberName(item.holderMemberId)}</Text>
-                <Text style={styles.maskedNum}>{maskDocNumber(item.documentType, item.documentNumber)}</Text>
+                <Text style={styles.maskedNum}>{item.documentNumber}</Text>
               </TouchableOpacity>
             );
           }}
