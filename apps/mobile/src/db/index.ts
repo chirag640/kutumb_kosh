@@ -97,14 +97,21 @@ const webDbMock = {
     if (insertMatch) {
       const tableName = insertMatch[1];
       const fields = insertMatch[2].split(',').map(f => f.trim());
+      const valuesList = insertMatch[3].split(',').map(v => v.trim());
       const row: any = {};
       
       let tableData = getWebTable(tableName);
       const currentMaxId = tableData.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
       row.id = currentMaxId + 1;
 
+      let paramIndex = 0;
       fields.forEach((field, index) => {
-        row[field] = params[index];
+        const valueExpr = valuesList[index];
+        if (valueExpr === '?') {
+          row[field] = params[paramIndex++];
+        } else if (valueExpr) {
+          row[field] = valueExpr.replace(/['"]/g, '');
+        }
       });
       
       if (row.local_id) {

@@ -23,10 +23,14 @@ On the mobile app, local data is stored in SQLite. On the web platform, the app 
 4. **No Query Sorting:**
    * **Problem:** The mock returned data in the order of insertion without evaluating `ORDER BY` statements.
    * **Impact:** Getting recent log history or sorting maturities failed to return the latest logs/entries first.
+5. **INSERT Parameter Offsets due to Literals (Misaligning Database Fields):**
+   * **Problem:** The original `runSync` INSERT parser mapped columns to parameters directly by index: `row[field] = params[index]`. However, many insert statements include literal values inside the SQL string (e.g. `'pending'` in `crud.ts` or `'synced'` in `conflicts.tsx`).
+   * **Impact:** The literal values offset the `params` index mapping by 1. For example, inserting a record caused the database fields `updated_at` and custom index fields (like dates and member IDs) to be shifted, corrupting stored dates and leaving values as `undefined`. This broke data display and query filtering for newly inserted items.
 
 ### Implemented Solutions
 We rewrote the SQL query parser/evaluator inside [index.ts](file:///c:/Users/chaud/OneDrive/Desktop/random/kutumb_kosh/apps/mobile/src/db/index.ts) to be robust and fully generic:
 * **Whitespace Normalization:** Before running regular expressions, newlines and excessive spacing are normalized: `const cleanSql = sql.replace(/\s+/g, ' ').trim();`.
+* **Placeholder/Literal-Aware INSERT Mapping:** We now split the `VALUES` clause (`valuesList`) and evaluate each value. If the value in the SQL query is a `?` placeholder, we consume the next parameter from `params`. If it is a literal string, we assign the literal directly, ensuring perfect index mapping and zero column offsets.
 * **Evaluate WHERE Clauses Generically:** Introduced a generic helper function `evaluateWhere(row, conditionSql, params)` which matches:
   * `local_id = ?` (with soft deletes `deleted_at IS NULL`)
   * `local_id IN (?, ?, ...)`
