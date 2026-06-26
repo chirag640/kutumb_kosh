@@ -5,7 +5,8 @@ import {
   Text, 
   TouchableOpacity, 
   ActivityIndicator, 
-  Alert 
+  Alert,
+  Platform
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -82,10 +83,14 @@ export default function ExportSettingsScreen() {
       const wsLoan = XLSX.utils.json_to_sheet(loanSheetData);
       XLSX.utils.book_append_sheet(wb, wsLoan, "Loans");
 
-      // 4. Generate base64
-      const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+      // 4. Save and Share
+      if (Platform.OS === 'web') {
+        XLSX.writeFile(wb, 'KutumbKosh_Financial_Backup.xlsx');
+        return;
+      }
 
-      // 5. Save and Share
+      // Generate base64 (only needed for native file system write)
+      const wbout = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
       const fileUri = FileSystem.documentDirectory + 'KutumbKosh_Financial_Backup.xlsx';
       await FileSystem.writeAsStringAsync(fileUri, wbout, {
         encoding: FileSystem.EncodingType.Base64,
@@ -181,10 +186,13 @@ export default function ExportSettingsScreen() {
       doc.setTextColor(134, 134, 133);
       doc.text("Report secured via KutumbKosh client-side AES-256 encryption.", 14, 280);
 
-      // 3. Generate base64 string
-      const pdfBase64 = doc.output('datauristring').split(',')[1];
-
       // 4. Save and share
+      if (Platform.OS === 'web') {
+        doc.save('KutumbKosh_Financial_Report.pdf');
+        return;
+      }
+
+      const pdfBase64 = doc.output('datauristring').split(',')[1];
       const fileUri = FileSystem.documentDirectory + 'KutumbKosh_Financial_Report.pdf';
       await FileSystem.writeAsStringAsync(fileUri, pdfBase64, {
         encoding: FileSystem.EncodingType.Base64,
