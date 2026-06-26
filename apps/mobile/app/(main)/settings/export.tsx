@@ -55,7 +55,7 @@ export default function ExportSettingsScreen() {
       const bankSheetData = banks.map(b => ({
         Bank: b.bankName,
         Type: b.accountType,
-        Last4Digits: b.last4Digits,
+        AccountNumber: b.accountNumber,
         Balance: b.balance
       }));
 

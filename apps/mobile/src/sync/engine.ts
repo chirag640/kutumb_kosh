@@ -93,15 +93,6 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
       }
     }
 
-    // Log to remote
-    await client.query(
-      `INSERT INTO kk_sync_log (device_id, synced_at, sync_type, records_pushed, duration_ms)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [deviceId, syncedAt, type, totalPushed, Date.now() - startTime]
-    );
-
-    await client.end();
-
     // Pull remote changes (Delta Sync)
     const cryptoKey = useAuthStore.getState().cryptoKey;
     let pulledCount = 0;
@@ -113,6 +104,15 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
         console.warn('[Sync] Pull from remote failed during bidirectional sync:', pullRes.error);
       }
     }
+
+    // Log to remote
+    await client.query(
+      `INSERT INTO kk_sync_log (device_id, synced_at, sync_type, records_pushed, records_pulled, duration_ms)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [deviceId, syncedAt, type, totalPushed, pulledCount, Date.now() - startTime]
+    );
+
+    await client.end();
 
     // Update local sync log
     db.runSync(
@@ -223,8 +223,14 @@ export async function setupRemoteDatabase(dbUrl: string): Promise<{ success: boo
         synced_at      TIMESTAMPTZ DEFAULT now(),
         sync_type      TEXT,
         records_pushed INT,
+        records_pulled INT,
         duration_ms    INT
       );
+    `);
+
+    // Ensure records_pulled column exists for older tables
+    await client.query(`
+      ALTER TABLE kk_sync_log ADD COLUMN IF NOT EXISTS records_pulled INT;
     `);
 
     await client.end();

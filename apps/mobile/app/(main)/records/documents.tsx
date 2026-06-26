@@ -16,11 +16,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
-import { calcDaysRemaining } from '../../../src/utils/calculations';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
+import { calcDaysRemaining, isValidDate } from '../../../src/utils/calculations';
 import type { ImportantDocument, FamilyMember } from '@kutumbkosh/shared';
 
-const TYPES = ['Aadhaar', 'PAN', 'Passport', 'Driving License', 'Vehicle RC', 'Ration Card', 'Voter ID', 'Birth Certificate', 'Marriage Certificate', 'Other'];
+const TYPES = ['Aadhaar', 'PAN', 'Passport', 'Driving License', 'Vehicle RC', 'Vehicle Insurance', 'LIC Policy', 'Health Insurance', 'Term Insurance', 'Property Documents', 'Bank Passbook', 'Ration Card', 'Voter ID', 'Birth Certificate', 'Marriage Certificate', 'Other'];
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function DocumentsScreen() {
@@ -39,6 +39,9 @@ export default function DocumentsScreen() {
   const [neverExpires, setNeverExpires] = useState(true);
   const [physicalLocation, setPhysicalLocation] = useState('');
   const [notes, setNotes] = useState('');
+
+  // Edit mode
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Reveal state
   const [revealedDocId, setRevealedDocId] = useState<string | null>(null);
@@ -66,38 +69,71 @@ export default function DocumentsScreen() {
     }
   };
 
+  const resetForm = (firstMemberId?: string) => {
+    setHolderMemberId(firstMemberId || members[0]?.localId || '');
+    setDocumentType('Aadhaar');
+    setDocumentNumber('');
+    setIssueDate('');
+    setExpiryDate('');
+    setNeverExpires(true);
+    setPhysicalLocation('');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: ImportantDocument) => {
+    setHolderMemberId(item.holderMemberId);
+    setDocumentType(item.documentType);
+    setDocumentNumber(item.documentNumber);
+    setIssueDate(item.issueDate || '');
+    setExpiryDate(item.expiryDate || '');
+    setNeverExpires(item.neverExpires);
+    setPhysicalLocation(item.physicalLocation || '');
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!documentNumber.trim()) {
       Alert.alert('Error', 'Document number is required.');
       return;
     }
+    if (!neverExpires && !isValidDate(expiryDate)) {
+      Alert.alert('Invalid Date', 'Expiry date must be in YYYY-MM-DD format (e.g., 2035-12-31).');
+      return;
+    }
+
+    const payload = {
+      holderMemberId,
+      documentType,
+      documentNumber,
+      issueDate: issueDate || undefined,
+      expiryDate: neverExpires ? undefined : expiryDate,
+      neverExpires,
+      physicalLocation,
+      notes,
+    };
+    const indexFields = { expiry_date: neverExpires ? null : expiryDate };
 
     setLoading(true);
     try {
-      await insertRecord('documents', {
-        holderMemberId,
-        documentType,
-        documentNumber,
-        issueDate: issueDate || undefined,
-        expiryDate: neverExpires ? undefined : expiryDate,
-        neverExpires,
-        physicalLocation,
-        notes,
-      }, cryptoKey, {
-        expiry_date: neverExpires ? null : expiryDate,
-      });
-
+      if (editingId) {
+        await updateRecord('documents', editingId, payload, cryptoKey, indexFields);
+      } else {
+        await insertRecord('documents', payload, cryptoKey, indexFields);
+      }
       setModalVisible(false);
-      // Reset form
-      setDocumentNumber('');
-      setIssueDate('');
-      setExpiryDate('');
-      setPhysicalLocation('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save document');
+      Alert.alert('Error', editingId ? 'Failed to update document' : 'Failed to save document');
     } finally {
       setLoading(false);
     }
@@ -153,12 +189,12 @@ export default function DocumentsScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Important Documents</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.infoBar}>Tap a card to copy the document number. Long press to delete.</Text>
+      <Text style={styles.infoBar}>Tap to edit · Long press to delete · Tap number to copy</Text>
 
       {loading && documents.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -178,9 +214,9 @@ export default function DocumentsScreen() {
           renderItem={({ item }) => {
             const status = getDocStatus(item);
             return (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.card}
-                onPress={() => handleReveal(item)}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.documentType)}
               >
                 <View style={styles.cardTop}>
@@ -193,6 +229,12 @@ export default function DocumentsScreen() {
                 <Text style={styles.docType} numberOfLines={1}>{item.documentType}</Text>
                 <Text style={styles.holder} numberOfLines={1}>Holder: {getMemberName(item.holderMemberId)}</Text>
                 <Text style={styles.maskedNum}>{item.documentNumber}</Text>
+                <TouchableOpacity
+                  style={styles.copyBtn}
+                  onPress={() => handleReveal(item)}
+                >
+                  <Ionicons name="copy-outline" size={14} color="#868685" />
+                </TouchableOpacity>
               </TouchableOpacity>
             );
           }}
@@ -200,12 +242,17 @@ export default function DocumentsScreen() {
       )}
 
       {/* Add Document Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => { setModalVisible(false); resetForm(); }}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vault Document</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Document' : 'Vault Document'}</Text>
+              <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
             </View>
@@ -310,7 +357,7 @@ export default function DocumentsScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Document</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Document' : 'Save Document'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -520,5 +567,10 @@ const styles = StyleSheet.create({
   },
   spacer: {
     height: 12,
+  },
+  copyBtn: {
+    padding: 4,
+    marginTop: 4,
+    alignSelf: 'flex-start',
   },
 });

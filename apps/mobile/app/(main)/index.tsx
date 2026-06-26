@@ -118,7 +118,7 @@ export default function DashboardScreen() {
         if (ins.status === 'Active') {
           const days = calcDaysRemaining(ins.renewalDate);
           if (days < 0) {
-            newAlerts.push({ id: `ins-${ins.localId}`, label: `Insurance Expired: ${ins.company}`, type: 'red', icon: 'shield-alert' });
+            newAlerts.push({ id: `ins-${ins.localId}`, label: `Insurance Expired: ${ins.company}`, type: 'red', icon: 'shield-outline' });
           } else if (days <= 7) {
             newAlerts.push({ id: `ins-${ins.localId}`, label: `Renewal in ${days}d`, type: 'orange', icon: 'time' });
           } else if (days <= 30) {

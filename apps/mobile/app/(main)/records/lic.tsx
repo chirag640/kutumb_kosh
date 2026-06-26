@@ -14,10 +14,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { DaysChip } from '../../../src/components/DaysChip';
-import { calcDaysRemaining, formatINR } from '../../../src/utils/calculations';
+import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
 import type { LICPolicy, FamilyMember } from '@kutumbkosh/shared';
 
 const FREQUENCIES = ['Monthly', 'Quarterly', 'Half-Yearly', 'Yearly'];
@@ -41,6 +41,9 @@ export default function LICScreen() {
   const [maturityDate, setMaturityDate] = useState('2040-06-20');
   const [status, setStatus] = useState<LICPolicy['status']>('Active');
   const [notes, setNotes] = useState('');
+
+  // Edit mode
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -67,40 +70,74 @@ export default function LICScreen() {
     }
   };
 
+  const resetForm = () => {
+    setPolicyHolderMemberId(members[0]?.localId || '');
+    setPolicyNumber('');
+    setPlanName('');
+    setSumAssured('');
+    setPremiumAmount('');
+    setFrequency('Yearly');
+    setNextDueDate('2026-06-20');
+    setMaturityDate('2040-06-20');
+    setStatus('Active');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => { resetForm(); setModalVisible(true); };
+
+  const handleOpenEdit = (item: LICPolicy) => {
+    setPolicyHolderMemberId(item.policyHolderMemberId);
+    setPolicyNumber(item.policyNumber);
+    setPlanName(item.planName);
+    setSumAssured(String(item.sumAssured));
+    setPremiumAmount(String(item.premiumAmount));
+    setFrequency(item.frequency);
+    setNextDueDate(item.nextDueDate);
+    setMaturityDate(item.maturityDate);
+    setStatus(item.status);
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!policyNumber.trim() || !planName.trim() || !premiumAmount.trim()) {
       Alert.alert('Error', 'Please fill in all required fields.');
       return;
     }
+    if (!isValidDate(nextDueDate) || !isValidDate(maturityDate)) {
+      Alert.alert('Invalid Date', 'Dates must be in YYYY-MM-DD format (e.g., 2026-06-20).');
+      return;
+    }
+
+    const payload = {
+      policyHolderMemberId,
+      policyNumber,
+      planName,
+      sumAssured: Number(sumAssured),
+      premiumAmount: Number(premiumAmount),
+      frequency,
+      nextDueDate,
+      maturityDate,
+      status,
+      notes,
+    };
+    const indexFields = { due_date: nextDueDate };
 
     setLoading(true);
     try {
-      await insertRecord('lic_policies', {
-        policyHolderMemberId,
-        policyNumber,
-        planName,
-        sumAssured: Number(sumAssured),
-        premiumAmount: Number(premiumAmount),
-        frequency,
-        nextDueDate,
-        maturityDate,
-        status,
-        notes,
-      }, cryptoKey, {
-        due_date: nextDueDate,
-      });
-
+      if (editingId) {
+        await updateRecord('lic_policies', editingId, payload, cryptoKey, indexFields);
+      } else {
+        await insertRecord('lic_policies', payload, cryptoKey, indexFields);
+      }
       setModalVisible(false);
-      // Reset form
-      setPolicyNumber('');
-      setPlanName('');
-      setSumAssured('');
-      setPremiumAmount('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save LIC policy');
+      Alert.alert('Error', editingId ? 'Failed to update LIC policy' : 'Failed to save LIC policy');
     } finally {
       setLoading(false);
     }

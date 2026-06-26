@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
-import { formatINR } from '../../../src/utils/calculations';
+import { formatINR, isValidDate } from '../../../src/utils/calculations';
 import type { IncomeEntry, FamilyMember } from '@kutumbkosh/shared';
 
 const SOURCES = ['Salary', 'Business', 'Farming', 'Rent', 'Interest/FD', 'Pension', 'Other'];
@@ -72,6 +72,10 @@ export default function IncomeScreen() {
     }
     if (!memberId) {
       Alert.alert('Member Required', 'Please select or add a family member first.');
+      return;
+    }
+    if (!isValidDate(date)) {
+      Alert.alert('Invalid Date', 'Date must be in YYYY-MM-DD format (e.g., 2026-06-20).');
       return;
     }
 

@@ -75,7 +75,7 @@ export interface BankAccount {
   bankName: string;
   accountType: 'Savings' | 'Current' | 'Salary' | 'Joint' | 'NRI';
   ownerMemberId: string;
-  last4Digits: string;
+  accountNumber: string;  // full account number (formerly last4Digits)
   balance: number;
   lastUpdated: string;
   notes?: string;

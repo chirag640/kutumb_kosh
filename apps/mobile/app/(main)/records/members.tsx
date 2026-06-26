@@ -1,29 +1,34 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  FlatList, 
-  TouchableOpacity, 
-  Modal, 
-  TextInput, 
-  ScrollView, 
-  Alert, 
-  ActivityIndicator 
+import React, { useState, useCallback } from 'react';
+import {
+  StyleSheet,
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  Modal,
+  TextInput,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { router, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
-import { calcDaysRemaining } from '../../../src/utils/calculations';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
+import { calcDaysRemaining, isValidDate } from '../../../src/utils/calculations';
 import type { FamilyMember } from '@kutumbkosh/shared';
 
 const RELATIONSHIPS = ['Self', 'Spouse', 'Father', 'Mother', 'Son', 'Daughter', 'Brother', 'Sister', 'Other'];
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
 
 export default function FamilyMembersScreen() {
   const { cryptoKey } = useAuthStore();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+
+  // Edit mode
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form inputs
   const [name, setName] = useState('');
@@ -52,34 +57,66 @@ export default function FamilyMembersScreen() {
     }
   };
 
-  const handleAddMember = async () => {
+  const resetForm = () => {
+    setName('');
+    setRelationship('Other');
+    setDateOfBirth('1990-01-01');
+    setMobile('');
+    setBloodGroup('A+');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: FamilyMember) => {
+    setName(item.name);
+    setRelationship(item.relationship);
+    setDateOfBirth(item.dateOfBirth);
+    setMobile(item.mobile || '');
+    setBloodGroup(item.bloodGroup || 'A+');
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
+  const handleSave = async () => {
     if (!cryptoKey) return;
     if (!name.trim()) {
       Alert.alert('Invalid Name', 'Name cannot be empty.');
       return;
     }
+    if (!isValidDate(dateOfBirth)) {
+      Alert.alert('Invalid Date', 'Date of Birth must be in YYYY-MM-DD format (e.g., 1995-05-15).');
+      return;
+    }
+
+    const payload = {
+      name,
+      relationship,
+      dateOfBirth,
+      mobile,
+      bloodGroup,
+      notes,
+      aadhaarAvailable: false,
+      panAvailable: false,
+    };
 
     setLoading(true);
     try {
-      await insertRecord('family_members', {
-        name,
-        relationship,
-        dateOfBirth,
-        mobile,
-        bloodGroup,
-        notes,
-        aadhaarAvailable: false,
-        panAvailable: false,
-      }, cryptoKey);
-
+      if (editingId) {
+        await updateRecord('family_members', editingId, payload, cryptoKey);
+      } else {
+        await insertRecord('family_members', payload, cryptoKey);
+      }
       setModalVisible(false);
-      // Reset form
-      setName('');
-      setMobile('');
-      setNotes('');
+      resetForm();
       loadMembers();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save family member profile');
+      Alert.alert('Error', editingId ? 'Failed to update member profile' : 'Failed to save family member profile');
     } finally {
       setLoading(false);
     }
@@ -90,24 +127,28 @@ export default function FamilyMembersScreen() {
       Alert.alert('Cannot Delete', 'At least one family member profile is required.');
       return;
     }
-    Alert.alert('Delete Member', `Are you sure you want to delete ${memName}? This will not delete linked records but they may lose profile associations.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Delete', 
-        style: 'destructive',
-        onPress: async () => {
-          setLoading(true);
-          try {
-            await deleteRecord('family_members', localId);
-            loadMembers();
-          } catch (err) {
-            Alert.alert('Error', 'Failed to delete member profile');
-          } finally {
-            setLoading(false);
-          }
-        }
-      }
-    ]);
+    Alert.alert(
+      'Delete Member',
+      `Are you sure you want to delete ${memName}? This will not delete linked records but they may lose profile associations.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              await deleteRecord('family_members', localId);
+              loadMembers();
+            } catch (err) {
+              Alert.alert('Error', 'Failed to delete member profile');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const getBdayCountdown = (dobStr: string) => {
@@ -118,8 +159,7 @@ export default function FamilyMembersScreen() {
     if (nextBirthday < today) {
       nextBirthday.setFullYear(today.getFullYear() + 1);
     }
-    const days = calcDaysRemaining(nextBirthday.toISOString().split('T')[0]);
-    return days;
+    return calcDaysRemaining(nextBirthday.toISOString().split('T')[0]);
   };
 
   return (
@@ -129,10 +169,12 @@ export default function FamilyMembersScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Family Profiles</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && members.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -144,8 +186,9 @@ export default function FamilyMembersScreen() {
           renderItem={({ item }) => {
             const bdayDays = getBdayCountdown(item.dateOfBirth);
             return (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.card}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.name)}
               >
                 <View style={styles.cardTop}>
@@ -184,13 +227,18 @@ export default function FamilyMembersScreen() {
         />
       )}
 
-      {/* Add Member Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      {/* Add / Edit Member Modal */}
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => { setModalVisible(false); resetForm(); }}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Add Family Member</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Family Member' : 'Add Family Member'}</Text>
+              <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
             </View>
@@ -210,16 +258,10 @@ export default function FamilyMembersScreen() {
                 {RELATIONSHIPS.map((rel) => (
                   <TouchableOpacity
                     key={rel}
-                    style={[
-                      styles.pickerChip,
-                      relationship === rel && styles.pickerChipActive
-                    ]}
-                    onPress={() => setRelationship(rel as any)}
+                    style={[styles.pickerChip, relationship === rel && styles.pickerChipActive]}
+                    onPress={() => setRelationship(rel as FamilyMember['relationship'])}
                   >
-                    <Text style={[
-                      styles.pickerChipText,
-                      relationship === rel && styles.pickerChipTextActive
-                    ]}>
+                    <Text style={[styles.pickerChipText, relationship === rel && styles.pickerChipTextActive]}>
                       {rel}
                     </Text>
                   </TouchableOpacity>
@@ -246,13 +288,19 @@ export default function FamilyMembersScreen() {
               />
 
               <Text style={styles.label}>Blood Group</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. O+, B-, AB+"
-                placeholderTextColor="#868685"
-                value={bloodGroup}
-                onChangeText={setBloodGroup}
-              />
+              <View style={styles.pickerContainer}>
+                {BLOOD_GROUPS.map((bg) => (
+                  <TouchableOpacity
+                    key={bg}
+                    style={[styles.pickerChip, bloodGroup === bg && styles.pickerChipActive]}
+                    onPress={() => setBloodGroup(bg)}
+                  >
+                    <Text style={[styles.pickerChipText, bloodGroup === bg && styles.pickerChipTextActive]}>
+                      {bg}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
               <Text style={styles.label}>Private Notes</Text>
               <TextInput
@@ -265,11 +313,11 @@ export default function FamilyMembersScreen() {
               />
 
               <View style={styles.spacer} />
-              <TouchableOpacity style={styles.saveBtn} onPress={handleAddMember} disabled={loading}>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={loading}>
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Profile</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Profile' : 'Save Profile'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -280,35 +328,30 @@ export default function FamilyMembersScreen() {
   );
 }
 
-import { router, useFocusEffect } from 'expo-router';
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#e8ebe6',
-    padding: 16,
-  },
+  container: { flex: 1, backgroundColor: '#e8ebe6', padding: 16 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 40,
-    marginBottom: 20,
+    marginBottom: 4,
   },
-  backBtn: {
-    padding: 4,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#0e0f0c',
-  },
+  backBtn: { padding: 4 },
+  title: { fontSize: 22, fontWeight: '900', color: '#0e0f0c' },
   addBtn: {
     backgroundColor: '#9fe870',
     borderWidth: 1.5,
     borderColor: '#0e0f0c',
     borderRadius: 9999,
     padding: 8,
+  },
+  hintText: {
+    fontSize: 11,
+    color: '#868685',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 16,
   },
   card: {
     backgroundColor: '#ffffff',
@@ -318,11 +361,7 @@ const styles = StyleSheet.create({
     borderColor: '#0e0f0c',
     marginBottom: 16,
   },
-  cardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
+  cardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   avatar: {
     width: 48,
     height: 48,
@@ -332,24 +371,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 12,
   },
-  avatarText: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#2ead4b',
-  },
-  info: {
-    flex: 1,
-  },
-  name: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0e0f0c',
-  },
-  relation: {
-    fontSize: 12,
-    color: '#868685',
-    marginTop: 2,
-  },
+  avatarText: { fontSize: 20, fontWeight: '900', color: '#2ead4b' },
+  info: { flex: 1 },
+  name: { fontSize: 16, fontWeight: '800', color: '#0e0f0c' },
+  relation: { fontSize: 12, color: '#868685', marginTop: 2 },
   bdayBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -358,11 +383,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
   },
-  bdayText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#db2777',
-  },
+  bdayText: { fontSize: 11, fontWeight: '700', color: '#db2777' },
   detailsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -370,10 +391,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#e8ebe6',
     paddingTop: 12,
   },
-  detailCol: {
-    flex: 1,
-    alignItems: 'center',
-  },
+  detailCol: { flex: 1, alignItems: 'center' },
   detailLabel: {
     fontSize: 9,
     fontWeight: '700',
@@ -381,22 +399,14 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 4,
   },
-  detailValue: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#0e0f0c',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(14, 15, 12, 0.4)',
-    justifyContent: 'flex-end',
-  },
+  detailValue: { fontSize: 13, fontWeight: '700', color: '#0e0f0c' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(14, 15, 12, 0.4)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
-    maxHeight: '85%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -404,14 +414,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0e0f0c',
-  },
-  modalScroll: {
-    paddingBottom: 40,
-  },
+  modalTitle: { fontSize: 20, fontWeight: '900', color: '#0e0f0c' },
+  modalScroll: { paddingBottom: 40 },
   label: {
     fontSize: 12,
     fontWeight: '700',
@@ -430,11 +434,7 @@ const styles = StyleSheet.create({
     color: '#0e0f0c',
     backgroundColor: '#ffffff',
   },
-  pickerContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginVertical: 4,
-  },
+  pickerContainer: { flexDirection: 'row', flexWrap: 'wrap', marginVertical: 4 },
   pickerChip: {
     backgroundColor: '#e8ebe6',
     borderRadius: 9999,
@@ -443,20 +443,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
-  pickerChipActive: {
-    backgroundColor: '#9fe870',
-    borderWidth: 1,
-    borderColor: '#0e0f0c',
-  },
-  pickerChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#454745',
-  },
-  pickerChipTextActive: {
-    color: '#0e0f0c',
-    fontWeight: '700',
-  },
+  pickerChipActive: { backgroundColor: '#9fe870', borderWidth: 1, borderColor: '#0e0f0c' },
+  pickerChipText: { fontSize: 13, fontWeight: '600', color: '#454745' },
+  pickerChipTextActive: { color: '#0e0f0c', fontWeight: '700' },
   saveBtn: {
     backgroundColor: '#9fe870',
     borderRadius: 9999,
@@ -464,12 +453,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
   },
-  saveBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0e0f0c',
-  },
-  spacer: {
-    height: 12,
-  },
+  saveBtnText: { fontSize: 16, fontWeight: '700', color: '#0e0f0c' },
+  spacer: { height: 12 },
 });

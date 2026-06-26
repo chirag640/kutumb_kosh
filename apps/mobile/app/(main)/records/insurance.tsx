@@ -14,10 +14,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { DaysChip } from '../../../src/components/DaysChip';
-import { calcDaysRemaining, formatINR } from '../../../src/utils/calculations';
+import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
 import type { InsurancePolicy, FamilyMember } from '@kutumbkosh/shared';
 
 const TYPES = ['Health', 'Term Life', 'Vehicle', 'Home', 'Crop/Farming', 'Personal Accident', 'Travel'];
@@ -29,6 +29,7 @@ export default function InsuranceScreen() {
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form states
   const [policyHolderMemberId, setPolicyHolderMemberId] = useState('');
@@ -66,39 +67,77 @@ export default function InsuranceScreen() {
     }
   };
 
+  const resetForm = () => {
+    setPolicyHolderMemberId(members[0]?.localId || '');
+    setInsuranceType('Health');
+    setCompany('');
+    setPolicyNumber('');
+    setCoverageAmount('');
+    setPremium('');
+    setRenewalDate('2026-06-20');
+    setStatus('Active');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: InsurancePolicy) => {
+    setPolicyHolderMemberId(item.policyHolderMemberId);
+    setInsuranceType(item.insuranceType);
+    setCompany(item.company);
+    setPolicyNumber(item.policyNumber);
+    setCoverageAmount(String(item.coverageAmount));
+    setPremium(String(item.premium));
+    setRenewalDate(item.renewalDate);
+    setStatus(item.status);
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!company.trim() || !policyNumber.trim() || !premium.trim()) {
       Alert.alert('Error', 'Please fill in all required fields.');
       return;
     }
+    if (!isValidDate(renewalDate)) {
+      Alert.alert('Invalid Date', 'Renewal date must be in YYYY-MM-DD format (e.g., 2026-06-20).');
+      return;
+    }
+
+    const payload = {
+      policyHolderMemberId,
+      insuranceType,
+      company,
+      policyNumber,
+      coverageAmount: Number(coverageAmount),
+      premium: Number(premium),
+      renewalDate,
+      status,
+      notes,
+    };
+    const indexFields = {
+      renewal_date: renewalDate,
+    };
 
     setLoading(true);
     try {
-      await insertRecord('insurance_policies', {
-        policyHolderMemberId,
-        insuranceType,
-        company,
-        policyNumber,
-        coverageAmount: Number(coverageAmount),
-        premium: Number(premium),
-        renewalDate,
-        status,
-        notes,
-      }, cryptoKey, {
-        renewal_date: renewalDate,
-      });
+      if (editingId) {
+        await updateRecord('insurance_policies', editingId, payload, cryptoKey, indexFields);
+      } else {
+        await insertRecord('insurance_policies', payload, cryptoKey, indexFields);
+      }
 
       setModalVisible(false);
-      // Reset form
-      setCompany('');
-      setPolicyNumber('');
-      setCoverageAmount('');
-      setPremium('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save insurance policy');
+      Alert.alert('Error', editingId ? 'Failed to update insurance policy' : 'Failed to save insurance policy');
     } finally {
       setLoading(false);
     }
@@ -145,10 +184,12 @@ export default function InsuranceScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>General Insurance</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && policies.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -169,6 +210,7 @@ export default function InsuranceScreen() {
             return (
               <TouchableOpacity 
                 style={styles.card}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.company)}
               >
                 {/* Left urgency colored strip */}
@@ -210,7 +252,7 @@ export default function InsuranceScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vault Insurance Policy</Text>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Insurance Policy' : 'Vault Insurance Policy'}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
@@ -342,7 +384,7 @@ export default function InsuranceScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Policy</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Policy' : 'Save Policy'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -373,6 +415,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     color: '#0e0f0c',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#868685',
+    textAlign: 'center',
+    marginBottom: 12,
   },
   addBtn: {
     backgroundColor: '#9fe870',

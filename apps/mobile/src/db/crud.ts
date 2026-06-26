@@ -1,6 +1,7 @@
 import { db } from './index';
 import { encrypt, decrypt, encryptRecord, decryptRecord, type EncryptedBlob, type CryptoKey } from '../crypto';
 import { randomUUID } from 'expo-crypto';
+import { useSyncStore } from '../store/syncStore';
 
 // Generic CRUD — all tables use same pattern
 
@@ -24,9 +25,11 @@ export async function insertRecord<T>(
      VALUES (?, ?, ?, 'pending', ?, ? ${indexValPlaceholder})`,
     [localId, blob.iv, blob.data, now, now, ...Object.values(indexFields)]
   );
-  // Background sync trigger
+  // Background sync trigger — debounced via isSyncing guard
   import('../sync/engine').then(({ performSync }) => {
-    performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    if (!useSyncStore.getState().isSyncing) {
+      performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    }
   });
   return localId;
 }
@@ -49,9 +52,11 @@ export async function updateRecord<T>(
      WHERE local_id = ? AND deleted_at IS NULL`,
     [blob.iv, blob.data, now, ...Object.values(indexFields), localId]
   );
-  // Background sync trigger
+  // Background sync trigger — debounced via isSyncing guard
   import('../sync/engine').then(({ performSync }) => {
-    performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    if (!useSyncStore.getState().isSyncing) {
+      performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    }
   });
 }
 
@@ -61,9 +66,11 @@ export async function deleteRecord(table: string, localId: string): Promise<void
     `UPDATE ${table} SET deleted_at = ?, sync_status = 'pending' WHERE local_id = ?`,
     [now, localId]
   );
-  // Background sync trigger
+  // Background sync trigger — debounced via isSyncing guard
   import('../sync/engine').then(({ performSync }) => {
-    performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    if (!useSyncStore.getState().isSyncing) {
+      performSync('manual').catch(err => console.log('Auto-sync failed:', err));
+    }
   });
 }
 

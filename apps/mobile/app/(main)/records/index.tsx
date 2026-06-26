@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
   Alert 
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../../src/store/authStore';
 import { getAllRecords } from '../../../src/db/crud';
@@ -28,9 +28,11 @@ export default function RecordsMenuScreen() {
     members: 0,
   });
 
-  useEffect(() => {
-    loadCounts();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      loadCounts();
+    }, [cryptoKey])
+  );
 
   const loadCounts = async () => {
     if (!cryptoKey) return;

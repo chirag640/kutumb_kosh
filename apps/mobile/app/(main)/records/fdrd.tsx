@@ -14,9 +14,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
-import { calcDaysRemaining, formatINR } from '../../../src/utils/calculations';
+import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
 import type { FDRDEntry, FamilyMember } from '@kutumbkosh/shared';
 
 const STATUSES = ['Active', 'Matured', 'Broken'];
@@ -41,6 +41,9 @@ export default function FDRDScreen() {
   const [status, setStatus] = useState<FDRDEntry['status']>('Active');
   const [notes, setNotes] = useState('');
 
+  // Edit mode
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   useEffect(() => {
     loadData();
   }, []);
@@ -64,42 +67,77 @@ export default function FDRDScreen() {
     }
   };
 
+  const resetForm = () => {
+    setType('FD');
+    setBank('');
+    setHolderMemberId(members[0]?.localId || '');
+    setPrincipal('');
+    setMonthlyAmount('');
+    setInterestRate('');
+    setStartDate('2026-01-01');
+    setMaturityDate('2031-01-01');
+    setMaturityAmount('');
+    setStatus('Active');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => { resetForm(); setModalVisible(true); };
+
+  const handleOpenEdit = (item: FDRDEntry) => {
+    setType(item.type);
+    setBank(item.bank);
+    setHolderMemberId(item.holderMemberId);
+    setPrincipal(String(item.principal));
+    setMonthlyAmount(item.monthlyAmount ? String(item.monthlyAmount) : '');
+    setInterestRate(String(item.interestRate));
+    setStartDate(item.startDate);
+    setMaturityDate(item.maturityDate);
+    setMaturityAmount(String(item.maturityAmount));
+    setStatus(item.status);
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!bank.trim() || !principal.trim() || !interestRate.trim() || !maturityAmount.trim()) {
       Alert.alert('Error', 'Please fill in all required fields.');
       return;
     }
+    if (!isValidDate(startDate) || !isValidDate(maturityDate)) {
+      Alert.alert('Invalid Date', 'Dates must be in YYYY-MM-DD format (e.g., 2026-01-01).');
+      return;
+    }
+
+    const payload = {
+      type,
+      bank,
+      holderMemberId,
+      principal: Number(principal),
+      monthlyAmount: type === 'RD' ? Number(monthlyAmount) : undefined,
+      interestRate: Number(interestRate),
+      startDate,
+      maturityDate,
+      maturityAmount: Number(maturityAmount),
+      status,
+      notes,
+    };
+    const indexFields = { maturity_date: maturityDate };
 
     setLoading(true);
     try {
-      await insertRecord('fdrd_entries', {
-        type,
-        bank,
-        holderMemberId,
-        principal: Number(principal),
-        monthlyAmount: type === 'RD' ? Number(monthlyAmount) : undefined,
-        interestRate: Number(interestRate),
-        startDate,
-        maturityDate,
-        maturityAmount: Number(maturityAmount),
-        status,
-        notes,
-      }, cryptoKey, {
-        maturity_date: maturityDate,
-      });
-
+      if (editingId) {
+        await updateRecord('fdrd_entries', editingId, payload, cryptoKey, indexFields);
+      } else {
+        await insertRecord('fdrd_entries', payload, cryptoKey, indexFields);
+      }
       setModalVisible(false);
-      // Reset form
-      setBank('');
-      setPrincipal('');
-      setMonthlyAmount('');
-      setInterestRate('');
-      setMaturityAmount('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save FD/RD record');
+      Alert.alert('Error', editingId ? 'Failed to update FD/RD record' : 'Failed to save FD/RD record');
     } finally {
       setLoading(false);
     }
@@ -138,7 +176,7 @@ export default function FDRDScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>FD & RD Tracker</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
@@ -163,8 +201,9 @@ export default function FDRDScreen() {
             const progress = totalDuration > 0 ? (elapsed / totalDuration) * 100 : 0;
 
             return (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.card}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.type)}
               >
                 <View style={styles.cardHeader}>

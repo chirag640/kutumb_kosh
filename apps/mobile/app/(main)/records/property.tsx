@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { formatINR } from '../../../src/utils/calculations';
 import type { Property, FamilyMember, Loan } from '@kutumbkosh/shared';
@@ -28,6 +28,7 @@ export default function PropertyScreen() {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -73,6 +74,40 @@ export default function PropertyScreen() {
     }
   };
 
+  const resetForm = () => {
+    setName('');
+    setType('House');
+    setOwnerMemberId(members[0]?.localId || '');
+    setLocation('');
+    setArea('');
+    setPurchaseDate('');
+    setPurchasePrice('');
+    setCurrentValue('');
+    setLinkedLoanLocalId('');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: Property) => {
+    setName(item.name);
+    setType(item.type);
+    setOwnerMemberId(item.ownerMemberId);
+    setLocation(item.location);
+    setArea(item.area || '');
+    setPurchaseDate(item.purchaseDate || '');
+    setPurchasePrice(String(item.purchasePrice));
+    setCurrentValue(String(item.currentValue || item.purchasePrice || ''));
+    setLinkedLoanLocalId(item.linkedLoanLocalId || '');
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!name.trim() || !location.trim() || !purchasePrice.trim()) {
@@ -80,34 +115,32 @@ export default function PropertyScreen() {
       return;
     }
 
+    const payload = {
+      name,
+      type,
+      ownerMemberId,
+      location,
+      area,
+      purchaseDate: purchaseDate || undefined,
+      purchasePrice: Number(purchasePrice),
+      currentValue: currentValue ? Number(currentValue) : Number(purchasePrice),
+      linkedLoanLocalId: linkedLoanLocalId || undefined,
+      notes,
+    };
+
     setLoading(true);
     try {
-      await insertRecord('property', {
-        name,
-        type,
-        ownerMemberId,
-        location,
-        area,
-        purchaseDate: purchaseDate || undefined,
-        purchasePrice: Number(purchasePrice),
-        currentValue: currentValue ? Number(currentValue) : Number(purchasePrice),
-        linkedLoanLocalId: linkedLoanLocalId || undefined,
-        notes,
-      }, cryptoKey);
+      if (editingId) {
+        await updateRecord('property', editingId, payload, cryptoKey);
+      } else {
+        await insertRecord('property', payload, cryptoKey);
+      }
 
       setModalVisible(false);
-      // Reset form
-      setName('');
-      setLocation('');
-      setArea('');
-      setPurchaseDate('');
-      setPurchasePrice('');
-      setCurrentValue('');
-      setLinkedLoanLocalId('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save property record');
+      Alert.alert('Error', editingId ? 'Failed to update property record' : 'Failed to save property record');
     } finally {
       setLoading(false);
     }
@@ -151,10 +184,12 @@ export default function PropertyScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Property Register</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {/* Total Valuation Card */}
       <View style={styles.valueCard}>
@@ -178,6 +213,7 @@ export default function PropertyScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity 
               style={styles.card}
+              onPress={() => handleOpenEdit(item)}
               onLongPress={() => handleDelete(item.localId, item.name)}
             >
               <View style={styles.cardHeader}>
@@ -215,7 +251,7 @@ export default function PropertyScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Register Property</Text>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Property Details' : 'Register Property'}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
@@ -361,7 +397,7 @@ export default function PropertyScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Property</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Details' : 'Save Property'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -392,6 +428,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     color: '#0e0f0c',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#868685',
+    textAlign: 'center',
+    marginBottom: 12,
   },
   addBtn: {
     backgroundColor: '#9fe870',

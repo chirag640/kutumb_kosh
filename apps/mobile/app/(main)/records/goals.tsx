@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { calcDaysRemaining, formatINR } from '../../../src/utils/calculations';
 import type { SavingsGoal } from '@kutumbkosh/shared';
@@ -26,6 +26,7 @@ export default function SavingsGoalsScreen() {
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form states
   const [title, setTitle] = useState('');
@@ -53,6 +54,34 @@ export default function SavingsGoalsScreen() {
     }
   };
 
+  const resetForm = () => {
+    setTitle('');
+    setTargetAmount('');
+    setSavedAmount('');
+    setMonthlyContribution('');
+    setTargetDate('2027-01-01');
+    setStatus('Active');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: SavingsGoal) => {
+    setTitle(item.title);
+    setTargetAmount(String(item.targetAmount));
+    setSavedAmount(String(item.savedAmount));
+    setMonthlyContribution(String(item.monthlyContribution));
+    setTargetDate(item.targetDate);
+    setStatus(item.status);
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!title.trim() || !targetAmount.trim() || !savedAmount.trim()) {
@@ -60,28 +89,29 @@ export default function SavingsGoalsScreen() {
       return;
     }
 
+    const payload = {
+      title,
+      targetAmount: Number(targetAmount),
+      savedAmount: Number(savedAmount),
+      monthlyContribution: Number(monthlyContribution) || 0,
+      targetDate,
+      status,
+      notes,
+    };
+
     setLoading(true);
     try {
-      await insertRecord('savings_goals', {
-        title,
-        targetAmount: Number(targetAmount),
-        savedAmount: Number(savedAmount),
-        monthlyContribution: Number(monthlyContribution) || 0,
-        targetDate,
-        status,
-        notes,
-      }, cryptoKey);
+      if (editingId) {
+        await updateRecord('savings_goals', editingId, payload, cryptoKey);
+      } else {
+        await insertRecord('savings_goals', payload, cryptoKey);
+      }
 
       setModalVisible(false);
-      // Reset form
-      setTitle('');
-      setTargetAmount('');
-      setSavedAmount('');
-      setMonthlyContribution('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save savings goal');
+      Alert.alert('Error', editingId ? 'Failed to update savings goal' : 'Failed to save savings goal');
     } finally {
       setLoading(false);
     }
@@ -115,10 +145,12 @@ export default function SavingsGoalsScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Savings Goals</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && goals.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -139,6 +171,7 @@ export default function SavingsGoalsScreen() {
             return (
               <TouchableOpacity 
                 style={styles.card}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.title)}
               >
                 <View style={styles.cardHeader}>
@@ -181,7 +214,7 @@ export default function SavingsGoalsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vault Savings Goal</Text>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Savings Goal' : 'Vault Savings Goal'}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
@@ -272,7 +305,7 @@ export default function SavingsGoalsScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Goal</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Goal' : 'Save Goal'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -303,6 +336,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     color: '#0e0f0c',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#868685',
+    textAlign: 'center',
+    marginBottom: 12,
   },
   addBtn: {
     backgroundColor: '#9fe870',

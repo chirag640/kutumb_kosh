@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
-import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { calcLoanRemainingMonths, calcLoanProgress, formatINR } from '../../../src/utils/calculations';
 import type { Loan, FamilyMember } from '@kutumbkosh/shared';
@@ -28,6 +28,7 @@ export default function LoansScreen() {
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form states
   const [loanType, setLoanType] = useState<Loan['loanType']>('Home Loan');
@@ -75,6 +76,42 @@ export default function LoansScreen() {
     }
   };
 
+  const resetForm = () => {
+    setLoanType('Home Loan');
+    setLender('');
+    setBorrowerMemberId(members[0]?.localId || '');
+    setOriginalAmount('');
+    setOutstandingAmount('');
+    setEmi('');
+    setInterestRate('');
+    setStartDate('2026-01-01');
+    setEndDate('2036-01-01');
+    setStatus('Active');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: Loan) => {
+    setLoanType(item.loanType);
+    setLender(item.lender);
+    setBorrowerMemberId(item.borrowerMemberId);
+    setOriginalAmount(String(item.originalAmount));
+    setOutstandingAmount(String(item.outstandingAmount));
+    setEmi(String(item.emi));
+    setInterestRate(String(item.interestRate));
+    setStartDate(item.startDate);
+    setEndDate(item.endDate);
+    setStatus(item.status);
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
     if (!lender.trim() || !originalAmount.trim() || !outstandingAmount.trim() || !emi.trim()) {
@@ -82,33 +119,33 @@ export default function LoansScreen() {
       return;
     }
 
+    const payload = {
+      loanType,
+      lender,
+      borrowerMemberId,
+      originalAmount: Number(originalAmount),
+      outstandingAmount: Number(outstandingAmount),
+      emi: Number(emi),
+      interestRate: Number(interestRate) || 0,
+      startDate,
+      endDate,
+      status,
+      notes,
+    };
+
     setLoading(true);
     try {
-      await insertRecord('loans', {
-        loanType,
-        lender,
-        borrowerMemberId,
-        originalAmount: Number(originalAmount),
-        outstandingAmount: Number(outstandingAmount),
-        emi: Number(emi),
-        interestRate: Number(interestRate) || 0,
-        startDate,
-        endDate,
-        status,
-        notes,
-      }, cryptoKey);
+      if (editingId) {
+        await updateRecord('loans', editingId, payload, cryptoKey);
+      } else {
+        await insertRecord('loans', payload, cryptoKey);
+      }
 
       setModalVisible(false);
-      // Reset form
-      setLender('');
-      setOriginalAmount('');
-      setOutstandingAmount('');
-      setEmi('');
-      setInterestRate('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save loan profile');
+      Alert.alert('Error', editingId ? 'Failed to update loan profile' : 'Failed to save loan profile');
     } finally {
       setLoading(false);
     }
@@ -147,10 +184,12 @@ export default function LoansScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Loans & EMIs</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {/* EMI Burden Card */}
       <View style={styles.burdenCard}>
@@ -178,6 +217,7 @@ export default function LoansScreen() {
             return (
               <TouchableOpacity 
                 style={styles.card}
+                onPress={() => handleOpenEdit(item)}
                 onLongPress={() => handleDelete(item.localId, item.lender)}
               >
                 <View style={styles.cardHeader}>
@@ -216,7 +256,7 @@ export default function LoansScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vault Loan & EMI</Text>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Loan Profile' : 'Vault Loan & EMI'}</Text>
               <TouchableOpacity onPress={() => setModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
@@ -368,7 +408,7 @@ export default function LoansScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Loan</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Loan' : 'Save Loan'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -399,6 +439,12 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
     color: '#0e0f0c',
+  },
+  hintText: {
+    fontSize: 12,
+    color: '#868685',
+    textAlign: 'center',
+    marginBottom: 12,
   },
   addBtn: {
     backgroundColor: '#9fe870',

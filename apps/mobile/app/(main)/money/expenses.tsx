@@ -15,8 +15,9 @@ import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
+import { db } from '../../../src/db';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
-import { formatINR } from '../../../src/utils/calculations';
+import { formatINR, isValidDate } from '../../../src/utils/calculations';
 import type { ExpenseEntry, FamilyMember, ExpenseCategory } from '@kutumbkosh/shared';
 import { EXPENSE_SUBCATEGORIES } from '@kutumbkosh/shared';
 
@@ -29,6 +30,7 @@ export default function ExpensesScreen() {
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form inputs
   const [amount, setAmount] = useState('');
@@ -43,6 +45,8 @@ export default function ExpensesScreen() {
   // Budget calculations
   const [monthlyLimit, setMonthlyLimit] = useState(25000); // Default or load from app_settings
   const [monthlySpent, setMonthlySpent] = useState(0);
+  const [budgetModalVisible, setBudgetModalVisible] = useState(false);
+  const [newBudgetLimit, setNewBudgetLimit] = useState('25000');
 
   useFocusEffect(
     useCallback(() => {
@@ -73,6 +77,13 @@ export default function ExpensesScreen() {
           return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
         })
         .reduce((sum, e) => sum + e.amount, 0);
+      // Load monthly limit from app_settings
+      const limitSetting = db.getFirstSync('SELECT value FROM app_settings WHERE key = ?', ['monthly_budget_limit']) as { value: string } | null;
+      if (limitSetting && limitSetting.value) {
+        setMonthlyLimit(Number(limitSetting.value));
+        setNewBudgetLimit(limitSetting.value);
+      }
+
       setMonthlySpent(thisMonthSpent);
 
     } catch (err) {
@@ -90,6 +101,10 @@ export default function ExpensesScreen() {
     }
     if (!paidByMemberId) {
       Alert.alert('Member Required', 'Please select or add a family member first.');
+      return;
+    }
+    if (!isValidDate(date)) {
+      Alert.alert('Invalid Date', 'Date must be in YYYY-MM-DD format (e.g., 2026-06-20).');
       return;
     }
 
@@ -120,6 +135,20 @@ export default function ExpensesScreen() {
       Alert.alert('Error', 'Failed to save expense entry');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveBudgetLimit = async () => {
+    if (!newBudgetLimit || isNaN(Number(newBudgetLimit)) || Number(newBudgetLimit) <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid monthly budget limit.');
+      return;
+    }
+    try {
+      db.runSync('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', ['monthly_budget_limit', newBudgetLimit]);
+      setMonthlyLimit(Number(newBudgetLimit));
+      setBudgetModalVisible(false);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to save budget limit');
     }
   };
 
@@ -199,7 +228,15 @@ export default function ExpensesScreen() {
       {/* Monthly Budget Bar */}
       <View style={styles.budgetCard}>
         <View style={styles.budgetHeader}>
-          <Text style={styles.budgetTitle}>Monthly Budget</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.budgetTitle}>Monthly Budget</Text>
+            <TouchableOpacity onPress={() => {
+              setNewBudgetLimit(String(monthlyLimit));
+              setBudgetModalVisible(true);
+            }} style={{ marginLeft: 8 }}>
+              <Ionicons name="create-outline" size={16} color="#868685" />
+            </TouchableOpacity>
+          </View>
           <Text style={[styles.budgetText, isBudgetWarning && styles.warningText]}>
             {formatINR(monthlySpent)} / {formatINR(monthlyLimit)} spent
           </Text>
@@ -409,6 +446,34 @@ export default function ExpensesScreen() {
                 )}
               </TouchableOpacity>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+      {/* Edit Budget Modal */}
+      <Modal visible={budgetModalVisible} animationType="slide" transparent>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Set Monthly Budget</Text>
+              <TouchableOpacity onPress={() => setBudgetModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#0e0f0c" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Monthly Budget Limit (INR)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. 25000"
+              placeholderTextColor="#868685"
+              keyboardType="numeric"
+              value={newBudgetLimit}
+              onChangeText={setNewBudgetLimit}
+            />
+
+            <View style={styles.spacer} />
+            <TouchableOpacity style={styles.saveBtn} onPress={handleSaveBudgetLimit}>
+              <Text style={styles.saveBtnText}>Save Budget Limit</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

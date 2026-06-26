@@ -23,6 +23,10 @@ function evaluateWhere(row: any, conditionSql: string, params: any[]): boolean {
     const localId = params[0];
     return row.local_id === localId;
   }
+  if (sql.includes('key = ?')) {
+    const key = params[0];
+    return row.key === key;
+  }
   if (sql.includes('id = ?')) {
     const id = params[0];
     return Number(row.id) === Number(id) || row.local_id === id; 
@@ -116,6 +120,8 @@ const webDbMock = {
       
       if (row.local_id) {
         tableData = tableData.filter(r => r.local_id !== row.local_id);
+      } else if (row.key) {
+        tableData = tableData.filter(r => r.key !== row.key);
       }
       tableData.push(row);
       saveWebTable(tableName, tableData);
@@ -277,4 +283,14 @@ export function initializeDB(): void {
       value TEXT NOT NULL
     );
   `);
+
+  // Seed default settings if empty
+  try {
+    const existing = db.getFirstSync('SELECT value FROM app_settings WHERE key = ?', ['monthly_budget_limit']) as { value: string } | null;
+    if (!existing) {
+      db.runSync('INSERT INTO app_settings (key, value) VALUES (?, ?)', ['monthly_budget_limit', '25000']);
+    }
+  } catch (err) {
+    console.log('Failed to seed default settings:', err);
+  }
 }

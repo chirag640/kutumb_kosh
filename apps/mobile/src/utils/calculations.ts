@@ -32,10 +32,14 @@ export function formatINR(amount: number): string {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(amount);
 }
 
-export function maskDocNumber(type: string, number: string): string {
-  if (number.length <= 4) return number;
-  if (type === 'Aadhaar') return `XXXX-XXXX-${number.slice(-4)}`;
-  if (type === 'PAN') return `XXXXX${number.slice(-4)}`;
-  if (type === 'Passport') return `XX-XXXX-${number.slice(-3)}`;
-  return `XXXXXX${number.slice(-4)}`;
+/**
+ * Validates that a string is a valid YYYY-MM-DD calendar date.
+ * Returns true if valid, false if empty or malformed.
+ */
+export function isValidDate(dateStr: string): boolean {
+  if (!dateStr) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false;
+  const d = new Date(dateStr);
+  return !isNaN(d.getTime());
 }
+

@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  FlatList, 
-  TouchableOpacity, 
-  Modal, 
-  TextInput, 
-  Alert, 
+import {
+  StyleSheet,
+  View,
+  Text,
+  FlatList,
+  TouchableOpacity,
+  Modal,
+  TextInput,
+  Alert,
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -27,11 +27,14 @@ export default function BanksScreen() {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
+  // Edit mode — null means "add new"
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   // Form states
   const [bankName, setBankName] = useState('');
   const [accountType, setAccountType] = useState<BankAccount['accountType']>('Savings');
   const [ownerMemberId, setOwnerMemberId] = useState('');
-  const [last4Digits, setLast4Digits] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
   const [balance, setBalance] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -45,10 +48,10 @@ export default function BanksScreen() {
     try {
       const allBanks = await getAllRecords<BankAccount>('bank_accounts', cryptoKey);
       setBanks(allBanks);
-      
+
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
-      if (allMembers.length > 0) {
+      if (allMembers.length > 0 && !ownerMemberId) {
         setOwnerMemberId(allMembers[0].localId);
       }
     } catch (err) {
@@ -58,34 +61,61 @@ export default function BanksScreen() {
     }
   };
 
+  const resetForm = (firstMemberId?: string) => {
+    setBankName('');
+    setAccountType('Savings');
+    setOwnerMemberId(firstMemberId || members[0]?.localId || '');
+    setAccountNumber('');
+    setBalance('');
+    setNotes('');
+    setEditingId(null);
+  };
+
+  const handleOpenAdd = () => {
+    resetForm();
+    setModalVisible(true);
+  };
+
+  const handleOpenEdit = (item: BankAccount) => {
+    setBankName(item.bankName);
+    setAccountType(item.accountType);
+    setOwnerMemberId(item.ownerMemberId);
+    setAccountNumber(item.accountNumber);
+    setBalance(String(item.balance));
+    setNotes(item.notes || '');
+    setEditingId(item.localId);
+    setModalVisible(true);
+  };
+
   const handleSave = async () => {
     if (!cryptoKey) return;
-    if (!bankName.trim() || !last4Digits.trim() || !balance.trim()) {
+    if (!bankName.trim() || !accountNumber.trim() || !balance.trim()) {
       Alert.alert('Error', 'Please fill in all required fields.');
       return;
     }
 
+    const payload = {
+      bankName,
+      accountType,
+      ownerMemberId,
+      accountNumber,
+      balance: Number(balance),
+      lastUpdated: new Date().toISOString(),
+      notes,
+    };
+
     setLoading(true);
     try {
-      await insertRecord('bank_accounts', {
-        bankName,
-        accountType,
-        ownerMemberId,
-        last4Digits,
-        balance: Number(balance),
-        lastUpdated: new Date().toISOString(),
-        notes,
-      }, cryptoKey);
-
+      if (editingId) {
+        await updateRecord('bank_accounts', editingId, payload, cryptoKey);
+      } else {
+        await insertRecord('bank_accounts', payload, cryptoKey);
+      }
       setModalVisible(false);
-      // Reset form
-      setBankName('');
-      setLast4Digits('');
-      setBalance('');
-      setNotes('');
+      resetForm();
       loadData();
     } catch (err) {
-      Alert.alert('Error', 'Failed to save bank account');
+      Alert.alert('Error', editingId ? 'Failed to update bank account' : 'Failed to save bank account');
     } finally {
       setLoading(false);
     }
@@ -94,8 +124,8 @@ export default function BanksScreen() {
   const handleDelete = async (localId: string, name: string) => {
     Alert.alert('Delete Account', `Are you sure you want to delete ${name}?`, [
       { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Delete', 
+      {
+        text: 'Delete',
         style: 'destructive',
         onPress: async () => {
           setLoading(true);
@@ -107,8 +137,8 @@ export default function BanksScreen() {
           } finally {
             setLoading(false);
           }
-        }
-      }
+        },
+      },
     ]);
   };
 
@@ -124,10 +154,12 @@ export default function BanksScreen() {
           <Ionicons name="arrow-back" size={24} color="#0e0f0c" />
         </TouchableOpacity>
         <Text style={styles.title}>Bank Accounts</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
+        <TouchableOpacity style={styles.addBtn} onPress={handleOpenAdd}>
           <Ionicons name="add" size={24} color="#0e0f0c" />
         </TouchableOpacity>
       </View>
+
+      <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && banks.length === 0 ? (
         <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
@@ -143,14 +175,15 @@ export default function BanksScreen() {
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
           renderItem={({ item }) => (
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.card}
+              onPress={() => handleOpenEdit(item)}
               onLongPress={() => handleDelete(item.localId, item.bankName)}
             >
               <View style={styles.cardHeader}>
                 <View>
                   <Text style={styles.bankName}>{item.bankName}</Text>
-                  <Text style={styles.typeText}>{item.accountType} — Account No: {item.last4Digits}</Text>
+                  <Text style={styles.typeText}>{item.accountType} — Account No: {item.accountNumber}</Text>
                 </View>
                 <AmountDisplay amount={item.balance} color="#0e0f0c" size={18} />
               </View>
@@ -165,13 +198,18 @@ export default function BanksScreen() {
         />
       )}
 
-      {/* Add Bank Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      {/* Add / Edit Bank Modal */}
+      <Modal
+        visible={modalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => { setModalVisible(false); resetForm(); }}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vault Bank Account</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
+              <Text style={styles.modalTitle}>{editingId ? 'Edit Bank Account' : 'Vault Bank Account'}</Text>
+              <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
                 <Ionicons name="close" size={24} color="#0e0f0c" />
               </TouchableOpacity>
             </View>
@@ -191,16 +229,10 @@ export default function BanksScreen() {
                 {members.map((m) => (
                   <TouchableOpacity
                     key={m.localId}
-                    style={[
-                      styles.pickerChip,
-                      ownerMemberId === m.localId && styles.pickerChipActive
-                    ]}
+                    style={[styles.pickerChip, ownerMemberId === m.localId && styles.pickerChipActive]}
                     onPress={() => setOwnerMemberId(m.localId)}
                   >
-                    <Text style={[
-                      styles.pickerChipText,
-                      ownerMemberId === m.localId && styles.pickerChipTextActive
-                    ]}>
+                    <Text style={[styles.pickerChipText, ownerMemberId === m.localId && styles.pickerChipTextActive]}>
                       {m.name}
                     </Text>
                   </TouchableOpacity>
@@ -212,16 +244,10 @@ export default function BanksScreen() {
                 {TYPES.map((type) => (
                   <TouchableOpacity
                     key={type}
-                    style={[
-                      styles.pickerChip,
-                      accountType === type && styles.pickerChipActive
-                    ]}
-                    onPress={() => setAccountType(type as any)}
+                    style={[styles.pickerChip, accountType === type && styles.pickerChipActive]}
+                    onPress={() => setAccountType(type as BankAccount['accountType'])}
                   >
-                    <Text style={[
-                      styles.pickerChipText,
-                      accountType === type && styles.pickerChipTextActive
-                    ]}>
+                    <Text style={[styles.pickerChipText, accountType === type && styles.pickerChipTextActive]}>
                       {type}
                     </Text>
                   </TouchableOpacity>
@@ -234,8 +260,8 @@ export default function BanksScreen() {
                 placeholder="e.g. 123456789012"
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
-                value={last4Digits}
-                onChangeText={setLast4Digits}
+                value={accountNumber}
+                onChangeText={setAccountNumber}
               />
 
               <Text style={styles.label}>Current Balance (INR)</Text>
@@ -263,7 +289,7 @@ export default function BanksScreen() {
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
                 ) : (
-                  <Text style={styles.saveBtnText}>Save Account</Text>
+                  <Text style={styles.saveBtnText}>{editingId ? 'Update Account' : 'Save Account'}</Text>
                 )}
               </TouchableOpacity>
             </ScrollView>
@@ -275,26 +301,16 @@ export default function BanksScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#e8ebe6',
-    padding: 16,
-  },
+  container: { flex: 1, backgroundColor: '#e8ebe6', padding: 16 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 40,
-    marginBottom: 20,
+    marginBottom: 4,
   },
-  backBtn: {
-    padding: 4,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: '#0e0f0c',
-  },
+  backBtn: { padding: 4 },
+  title: { fontSize: 22, fontWeight: '900', color: '#0e0f0c' },
   addBtn: {
     backgroundColor: '#9fe870',
     borderWidth: 1.5,
@@ -302,25 +318,16 @@ const styles = StyleSheet.create({
     borderRadius: 9999,
     padding: 8,
   },
-  empty: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingTop: 80,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#0e0f0c',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#454745',
+  hintText: {
+    fontSize: 11,
+    color: '#868685',
+    fontWeight: '600',
     textAlign: 'center',
-    paddingHorizontal: 32,
+    marginBottom: 16,
   },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 80 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#0e0f0c', marginTop: 16, marginBottom: 8 },
+  emptySubtitle: { fontSize: 14, color: '#454745', textAlign: 'center', paddingHorizontal: 32 },
   card: {
     backgroundColor: '#ffffff',
     borderRadius: 20,
@@ -337,41 +344,18 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e8ebe6',
     paddingBottom: 12,
   },
-  bankName: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#0e0f0c',
-  },
-  typeText: {
-    fontSize: 12,
-    color: '#868685',
-    marginTop: 4,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-  },
-  ownerText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#454745',
-  },
-  updateText: {
-    fontSize: 11,
-    color: '#868685',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(14, 15, 12, 0.4)',
-    justifyContent: 'flex-end',
-  },
+  bankName: { fontSize: 16, fontWeight: '800', color: '#0e0f0c' },
+  typeText: { fontSize: 12, color: '#868685', marginTop: 4 },
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 12 },
+  ownerText: { fontSize: 12, fontWeight: '700', color: '#454745' },
+  updateText: { fontSize: 11, color: '#868685' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(14, 15, 12, 0.4)', justifyContent: 'flex-end' },
   modalContent: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 24,
-    maxHeight: '85%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -379,14 +363,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#0e0f0c',
-  },
-  modalScroll: {
-    paddingBottom: 40,
-  },
+  modalTitle: { fontSize: 20, fontWeight: '900', color: '#0e0f0c' },
+  modalScroll: { paddingBottom: 40 },
   label: {
     fontSize: 12,
     fontWeight: '700',
@@ -405,11 +383,7 @@ const styles = StyleSheet.create({
     color: '#0e0f0c',
     backgroundColor: '#ffffff',
   },
-  pickerContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginVertical: 4,
-  },
+  pickerContainer: { flexDirection: 'row', flexWrap: 'wrap', marginVertical: 4 },
   pickerChip: {
     backgroundColor: '#e8ebe6',
     borderRadius: 9999,
@@ -418,20 +392,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
     marginBottom: 8,
   },
-  pickerChipActive: {
-    backgroundColor: '#9fe870',
-    borderWidth: 1,
-    borderColor: '#0e0f0c',
-  },
-  pickerChipText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#454745',
-  },
-  pickerChipTextActive: {
-    color: '#0e0f0c',
-    fontWeight: '700',
-  },
+  pickerChipActive: { backgroundColor: '#9fe870', borderWidth: 1, borderColor: '#0e0f0c' },
+  pickerChipText: { fontSize: 13, fontWeight: '600', color: '#454745' },
+  pickerChipTextActive: { color: '#0e0f0c', fontWeight: '700' },
   saveBtn: {
     backgroundColor: '#9fe870',
     borderRadius: 9999,
@@ -439,12 +402,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
   },
-  saveBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#0e0f0c',
-  },
-  spacer: {
-    height: 12,
-  },
+  saveBtnText: { fontSize: 16, fontWeight: '700', color: '#0e0f0c' },
+  spacer: { height: 12 },
 });

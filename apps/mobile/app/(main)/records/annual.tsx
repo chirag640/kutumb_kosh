@@ -18,12 +18,13 @@ import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { formatINR } from '../../../src/utils/calculations';
 import type { IncomeEntry, ExpenseEntry } from '@kutumbkosh/shared';
 
-const YEARS = [2025, 2026, 2027, 2028];
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - 2 + i);
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function AnnualSummaryScreen() {
   const { cryptoKey } = useAuthStore();
-  const [selectedYear, setSelectedYear] = useState(2026);
+  const [selectedYear, setSelectedYear] = useState(CURRENT_YEAR);
   const [loading, setLoading] = useState(false);
 
   // Yearly aggregates
