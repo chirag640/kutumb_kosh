@@ -4,7 +4,7 @@ import { useAuthStore } from '../src/store/authStore';
 import { initializeDB } from '../src/db';
 import { registerEODSync, scheduleAlertsIfNeeded } from '../src/sync/scheduler';
 import * as SecureStore from '../src/utils/secureStore';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../src/utils/notifications';
 import { ActivityIndicator, View, AppState, AppStateStatus } from 'react-native';
 
 export default function RootLayout() {

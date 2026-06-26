@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
-import * as Notifications from 'expo-notifications';
+import * as Notifications from '../utils/notifications';
 import { performSync } from './engine';
 import { db } from '../db';
 
