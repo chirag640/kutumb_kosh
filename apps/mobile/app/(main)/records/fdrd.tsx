@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,23 +9,29 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { FDRDEntry, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const STATUSES = ['Active', 'Matured', 'Broken'];
 
 export default function FDRDScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [fdrds, setFdrds] = useState<FDRDEntry[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   // Form states
@@ -44,13 +50,42 @@ export default function FDRDScreen() {
   // Edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const { updateDraftField } = useFormDraft('fdrd', {
+    type: setType,
+    bank: setBank,
+    holderMemberId: setHolderMemberId,
+    principal: setPrincipal,
+    monthlyAmount: setMonthlyAmount,
+    interestRate: setInterestRate,
+    startDate: setStartDate,
+    maturityDate: setMaturityDate,
+    maturityAmount: setMaturityAmount,
+    status: setStatus,
+    notes: setNotes,
+  }, !editingId);
+
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && fdrds.length > 0) {
+      const item = fdrds.find(f => f.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, fdrds]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allEntries = await getAllRecords<FDRDEntry>('fdrd_entries', cryptoKey);
       setFdrds(allEntries);
@@ -58,12 +93,15 @@ export default function FDRDScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setHolderMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['fdrd'];
+        if (!draft || !draft.holderMemberId) {
+          setHolderMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to load FD/RD tracker data');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -132,6 +170,7 @@ export default function FDRDScreen() {
         await updateRecord('fdrd_entries', editingId, payload, cryptoKey, indexFields);
       } else {
         await insertRecord('fdrd_entries', payload, cryptoKey, indexFields);
+        useFormDraftStore.getState().clearDraft('fdrd');
       }
       setModalVisible(false);
       resetForm();
@@ -182,7 +221,11 @@ export default function FDRDScreen() {
       </View>
 
       {loading && fdrds.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : fdrds.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="trending-up-outline" size={64} color="#868685" />
@@ -194,6 +237,14 @@ export default function FDRDScreen() {
           data={fdrds}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const daysLeft = calcDaysRemaining(item.maturityDate);
             const totalDuration = new Date(item.maturityDate).getTime() - new Date(item.startDate).getTime();
@@ -270,7 +321,7 @@ export default function FDRDScreen() {
                       styles.pickerChip,
                       type === t && styles.pickerChipActive
                     ]}
-                    onPress={() => setType(t as any)}
+                    onPress={() => { setType(t as any); updateDraftField('type', t); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -288,7 +339,7 @@ export default function FDRDScreen() {
                 placeholder="e.g. ICICI Bank"
                 placeholderTextColor="#868685"
                 value={bank}
-                onChangeText={setBank}
+                onChangeText={(val) => { setBank(val); updateDraftField('bank', val); }}
               />
 
               <Text style={styles.label}>Holder</Text>
@@ -300,7 +351,7 @@ export default function FDRDScreen() {
                       styles.pickerChip,
                       holderMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setHolderMemberId(m.localId)}
+                    onPress={() => { setHolderMemberId(m.localId); updateDraftField('holderMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -319,7 +370,7 @@ export default function FDRDScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={principal}
-                onChangeText={setPrincipal}
+                onChangeText={(val) => { setPrincipal(val); updateDraftField('principal', val); }}
               />
 
               {type === 'RD' && (
@@ -327,11 +378,11 @@ export default function FDRDScreen() {
                   <Text style={styles.label}>Monthly Installment (INR)</Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="₹ 5,000"
+                    placeholder="₹ 5,00,000"
                     placeholderTextColor="#868685"
                     keyboardType="numeric"
                     value={monthlyAmount}
-                    onChangeText={setMonthlyAmount}
+                    onChangeText={(val) => { setMonthlyAmount(val); updateDraftField('monthlyAmount', val); }}
                   />
                 </View>
               )}
@@ -343,7 +394,7 @@ export default function FDRDScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={interestRate}
-                onChangeText={setInterestRate}
+                onChangeText={(val) => { setInterestRate(val); updateDraftField('interestRate', val); }}
               />
 
               <Text style={styles.label}>Maturity Amount (INR)</Text>
@@ -353,7 +404,7 @@ export default function FDRDScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={maturityAmount}
-                onChangeText={setMaturityAmount}
+                onChangeText={(val) => { setMaturityAmount(val); updateDraftField('maturityAmount', val); }}
               />
 
               <Text style={styles.label}>Start Date (YYYY-MM-DD)</Text>
@@ -362,7 +413,7 @@ export default function FDRDScreen() {
                 placeholder="2026-01-01"
                 placeholderTextColor="#868685"
                 value={startDate}
-                onChangeText={setStartDate}
+                onChangeText={(val) => { setStartDate(val); updateDraftField('startDate', val); }}
               />
 
               <Text style={styles.label}>Maturity Date (YYYY-MM-DD)</Text>
@@ -371,7 +422,7 @@ export default function FDRDScreen() {
                 placeholder="2031-01-01"
                 placeholderTextColor="#868685"
                 value={maturityDate}
-                onChangeText={setMaturityDate}
+                onChangeText={(val) => { setMaturityDate(val); updateDraftField('maturityDate', val); }}
               />
 
               <Text style={styles.label}>Status</Text>
@@ -383,7 +434,7 @@ export default function FDRDScreen() {
                       styles.pickerChip,
                       status === st && styles.pickerChipActive
                     ]}
-                    onPress={() => setStatus(st as any)}
+                    onPress={() => { setStatus(st as any); updateDraftField('status', st); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -402,7 +453,7 @@ export default function FDRDScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

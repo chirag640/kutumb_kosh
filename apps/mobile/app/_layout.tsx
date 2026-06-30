@@ -1,17 +1,46 @@
 import { useEffect, useState } from 'react';
 import { Stack, router } from 'expo-router';
+import { useIsMounted } from '../src/hooks/useIsMounted';
+import * as Sentry from '@sentry/react-native';
 import { useAuthStore } from '../src/store/authStore';
 import { initializeDB } from '../src/db';
 import { registerEODSync, scheduleAlertsIfNeeded } from '../src/sync/scheduler';
 import * as SecureStore from '../src/utils/secureStore';
 import * as Notifications from '../src/utils/notifications';
-import { ActivityIndicator, View, AppState, AppStateStatus } from 'react-native';
+import { ActivityIndicator, View, AppState, AppStateStatus, LogBox } from 'react-native';
+import { ErrorBoundary } from '../src/components/ErrorBoundary';
+import { Theme } from '../src/constants/theme';
 
-export default function RootLayout() {
+// Silence warning alerts out of developer control (Expo Go notifications/deprecations)
+LogBox.ignoreLogs([
+  'expo-background-fetch: This library is deprecated',
+  'setNotificationHandler: Notifications are disabled',
+  'getPermissionsAsync: Notifications are disabled',
+  'requestPermissionsAsync: Notifications are disabled',
+  'getAllScheduledNotificationsAsync: Notifications are disabled',
+  'Notifications are disabled in Android Expo Go'
+]);
+
+// Initialize Sentry for crash and error reporting
+// eslint-disable-next-line no-console
+const dsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
+if (!dsn && !__DEV__) {
+  console.warn('[Sentry] EXPO_PUBLIC_SENTRY_DSN is not set — crash reporting is inactive.');
+}
+
+Sentry.init({
+  dsn: dsn ?? '',
+  debug: __DEV__,
+  tracesSampleRate: __DEV__ ? 1.0 : 0.2,
+  enabled: !__DEV__ || !!dsn,
+});
+
+function RootLayout() {
   const isUnlocked = useAuthStore(s => s.isUnlocked);
   const storeEmail = useAuthStore(s => s.email);
   const [isReady, setIsReady] = useState(false);
   const [hasAccount, setHasAccount] = useState(false);
+  const isMounted = useIsMounted();
 
   const hasAccountResolved = hasAccount || !!storeEmail;
 
@@ -39,17 +68,19 @@ export default function RootLayout() {
         }
 
         // Run local offline alert scheduler
-        await scheduleAlertsIfNeeded().catch(err => console.log('Alert scheduling error:', err));
+        await scheduleAlertsIfNeeded().catch(() => {});
 
         const email = await SecureStore.getItemAsync('kk_email');
-        if (email) {
+        if ( email) {
           setHasAccount(true);
           useAuthStore.getState().setEmail(email);
         }
-      } catch (e) {
-        console.warn(e);
+      } catch (e: unknown) {
+        Sentry.captureException(e);
       } finally {
-        setIsReady(true);
+        if (isMounted()) {
+          setIsReady(true);
+        }
       }
     }
     prepare();
@@ -104,18 +135,26 @@ export default function RootLayout() {
   useEffect(() => {
     if (isUnlocked) {
       import('../src/sync/engine').then(({ performSync }) => {
-        performSync('on_open').catch(err => console.log('Unlock auto-sync failed:', err));
+        if (isMounted()) {
+          performSync('on_open').catch(() => {});
+        }
       });
     }
   }, [isUnlocked]);
 
   if (!isReady) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#e8ebe6' }}>
-        <ActivityIndicator size="large" color="#0e0f0c" />
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Theme.colors.background }}>
+        <ActivityIndicator size="large" color={Theme.colors.ink} />
       </View>
     );
   }
 
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <ErrorBoundary>
+      <Stack screenOptions={{ headerShown: false }} />
+    </ErrorBoundary>
+  );
 }
+
+export default Sentry.wrap(RootLayout);

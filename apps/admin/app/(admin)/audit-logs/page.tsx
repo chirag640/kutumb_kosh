@@ -3,6 +3,9 @@ import { db } from "@/lib/db";
 import { auditLog } from "@/lib/db/schema";
 import { desc } from "drizzle-orm";
 import { Calendar, Shield, Activity, Clock } from "lucide-react";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("audit-logs");
 
 export const revalidate = 0; // Ensure fresh logs on load
 
@@ -25,14 +28,16 @@ function getActionBadgeStyle(action: string) {
 }
 
 export default async function AuditLogsPage() {
-  let logs: any[] = [];
+  let logs: Array<{ id: string; action: string; targetId: string | null; note: string | null; createdAt: Date | null }> = [];
   try {
     logs = await db
       .select()
       .from(auditLog)
       .orderBy(desc(auditLog.createdAt));
-  } catch (error) {
-    console.error("Failed to query audit logs from Database:", error);
+  } catch (error: unknown) {
+    log.error("Failed to query audit logs from Database", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   return (

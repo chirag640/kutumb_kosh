@@ -1,14 +1,19 @@
 import nodemailer from 'nodemailer';
+import { getEnv } from '@/lib/env';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('email:otp');
 
 /**
  * Sends a 6-digit OTP email for credential recovery.
  */
 export async function sendOtpEmail(user: { name: string; email: string }, otp: string): Promise<void> {
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const smtpPort = parseInt(process.env.SMTP_PORT || '465', 10);
-  const smtpSecure = process.env.SMTP_SECURE !== 'false';
+  const env = getEnv();
+  const smtpUser = env.SMTP_USER;
+  const smtpPass = env.SMTP_PASS;
+  const smtpHost = env.SMTP_HOST || 'smtp.gmail.com';
+  const smtpPort = parseInt(env.SMTP_PORT || '465', 10);
+  const smtpSecure = env.SMTP_SECURE !== 'false';
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -41,11 +46,10 @@ export async function sendOtpEmail(user: { name: string; email: string }, otp: s
   `;
 
   if (!smtpUser || !smtpPass) {
-    console.warn('================================================================');
-    console.warn('⚠️ SMTP credentials not configured. Printing OTP to console:');
-    console.warn(`User Email: ${user.email}`);
-    console.warn(`OTP Code:   ${otp}`);
-    console.warn('================================================================');
+    log.warn('SMTP not configured — OTP email will not be sent', {
+      email: user.email,
+      otp: process.env.NODE_ENV !== 'production' ? otp : undefined,
+    });
     return;
   }
 

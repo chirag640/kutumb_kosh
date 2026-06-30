@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,22 +9,28 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { calcDaysRemaining, formatINR } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { SavingsGoal } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const STATUSES = ['Active', 'Achieved', 'Paused'];
 
 export default function SavingsGoalsScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [goals, setGoals] = useState<SavingsGoal[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -37,20 +43,45 @@ export default function SavingsGoalsScreen() {
   const [status, setStatus] = useState<SavingsGoal['status']>('Active');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('goal', {
+    title: setTitle,
+    targetAmount: setTargetAmount,
+    savedAmount: setSavedAmount,
+    monthlyContribution: setMonthlyContribution,
+    targetDate: setTargetDate,
+    status: setStatus,
+    notes: setNotes,
+  }, !editingId);
+
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && goals.length > 0) {
+      const item = goals.find(g => g.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, goals]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allGoals = await getAllRecords<SavingsGoal>('savings_goals', cryptoKey);
       setGoals(allGoals);
     } catch (err) {
       Alert.alert('Error', 'Failed to load savings goals');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -105,6 +136,7 @@ export default function SavingsGoalsScreen() {
         await updateRecord('savings_goals', editingId, payload, cryptoKey);
       } else {
         await insertRecord('savings_goals', payload, cryptoKey);
+        useFormDraftStore.getState().clearDraft('goal');
       }
 
       setModalVisible(false);
@@ -153,7 +185,11 @@ export default function SavingsGoalsScreen() {
       <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && goals.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : goals.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="ribbon-outline" size={64} color="#868685" />
@@ -165,6 +201,14 @@ export default function SavingsGoalsScreen() {
           data={goals}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const progress = (item.savedAmount / item.targetAmount) * 100;
             const daysLeft = calcDaysRemaining(item.targetDate);
@@ -227,7 +271,7 @@ export default function SavingsGoalsScreen() {
                 placeholder="e.g. New Farm Tractor"
                 placeholderTextColor="#868685"
                 value={title}
-                onChangeText={setTitle}
+                onChangeText={(val) => { setTitle(val); updateDraftField('title', val); }}
               />
 
               <Text style={styles.label}>Target Amount (INR)</Text>
@@ -237,7 +281,7 @@ export default function SavingsGoalsScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={targetAmount}
-                onChangeText={setTargetAmount}
+                onChangeText={(val) => { setTargetAmount(val); updateDraftField('targetAmount', val); }}
               />
 
               <Text style={styles.label}>Currently Saved (INR)</Text>
@@ -247,7 +291,7 @@ export default function SavingsGoalsScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={savedAmount}
-                onChangeText={setSavedAmount}
+                onChangeText={(val) => { setSavedAmount(val); updateDraftField('savedAmount', val); }}
               />
 
               <Text style={styles.label}>Monthly Contribution (INR)</Text>
@@ -257,7 +301,7 @@ export default function SavingsGoalsScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={monthlyContribution}
-                onChangeText={setMonthlyContribution}
+                onChangeText={(val) => { setMonthlyContribution(val); updateDraftField('monthlyContribution', val); }}
               />
 
               <Text style={styles.label}>Target Date (YYYY-MM-DD)</Text>
@@ -266,7 +310,7 @@ export default function SavingsGoalsScreen() {
                 placeholder="2027-01-01"
                 placeholderTextColor="#868685"
                 value={targetDate}
-                onChangeText={setTargetDate}
+                onChangeText={(val) => { setTargetDate(val); updateDraftField('targetDate', val); }}
               />
 
               <Text style={styles.label}>Status</Text>
@@ -278,7 +322,7 @@ export default function SavingsGoalsScreen() {
                       styles.pickerChip,
                       status === st && styles.pickerChipActive
                     ]}
-                    onPress={() => setStatus(st as any)}
+                    onPress={() => { setStatus(st as any); updateDraftField('status', st); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -297,7 +341,7 @@ export default function SavingsGoalsScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

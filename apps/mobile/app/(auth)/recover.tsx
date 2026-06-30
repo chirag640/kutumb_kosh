@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { requestRecoveryOtp, verifyRecoveryOtp } from '../../src/utils/adminApi';
+import { useIsMounted } from '../../src/hooks/useIsMounted';
 import { showAlert } from '../../src/utils/alert';
 const Alert = { alert: showAlert };
 
@@ -22,6 +23,7 @@ export default function RecoverScreen() {
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
+  const isMounted = useIsMounted();
 
   const handleRequestOtp = async () => {
     const trimmedEmail = email.trim().toLowerCase();
@@ -34,12 +36,16 @@ export default function RecoverScreen() {
     setLoading(true);
     try {
       await requestRecoveryOtp(trimmedEmail);
+      if (!isMounted()) return;
       // Always move to OTP step (server doesn't reveal if email exists)
       setStep('otp');
     } catch (err) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Could not send OTP. Please check your connection and try again.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -53,14 +59,18 @@ export default function RecoverScreen() {
     setLoading(true);
     try {
       await verifyRecoveryOtp(email.trim().toLowerCase(), trimmedOtp);
+      if (!isMounted()) return;
       setStep('done');
     } catch (err: any) {
+      if (!isMounted()) return;
       Alert.alert(
         'Verification Failed',
         err.message || 'The code was incorrect or expired. Please try again.'
       );
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -71,7 +81,13 @@ export default function RecoverScreen() {
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         {/* Header */}
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity 
+          style={styles.backBtn} 
+          onPress={() => router.back()}
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
+          accessibilityHint="Returns to the previous screen"
+        >
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
 
@@ -115,6 +131,9 @@ export default function RecoverScreen() {
                 style={styles.btnPrimary}
                 onPress={handleRequestOtp}
                 disabled={loading}
+                accessibilityLabel="Send Recovery Code"
+                accessibilityRole="button"
+                accessibilityHint="Requests one-time code to be sent to the email address above"
               >
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
@@ -151,6 +170,9 @@ export default function RecoverScreen() {
                 style={styles.btnPrimary}
                 onPress={handleVerifyOtp}
                 disabled={loading}
+                accessibilityLabel="Verify and Send Recovery Email"
+                accessibilityRole="button"
+                accessibilityHint="Verifies entered code and sends master password details to email"
               >
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
@@ -163,6 +185,9 @@ export default function RecoverScreen() {
                 style={styles.btnGhost}
                 onPress={() => { setStep('email'); setOtp(''); }}
                 disabled={loading}
+                accessibilityLabel="Resend Code"
+                accessibilityRole="button"
+                accessibilityHint="Returns to email input stage to request new code"
               >
                 <Text style={styles.btnGhostText}>Resend Code</Text>
               </TouchableOpacity>
@@ -191,6 +216,9 @@ export default function RecoverScreen() {
               <TouchableOpacity
                 style={styles.btnPrimary}
                 onPress={() => router.replace('/(auth)/onboarding')}
+                accessibilityLabel="Go to Login"
+                accessibilityRole="button"
+                accessibilityHint="Returns to the main onboarding and login screen"
               >
                 <Text style={styles.btnPrimaryText}>Go to Login</Text>
               </TouchableOpacity>

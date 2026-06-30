@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { adminUsers, auditLog } from '@/lib/db/schema';
 import { sendRecoveryConfirmationEmail } from '@/lib/email/welcome';
@@ -6,6 +6,8 @@ import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
 import { rateLimit } from '@/lib/rateLimit';
+import { apiSuccess, apiError, apiRateLimited, apiServerError, apiValidationError, apiNotFound } from '@/lib/api-response';
+import { otpVerifySchema } from '@kutumbkosh/shared/validators';
 
 /**
  * POST /api/mobile/otp/verify
@@ -20,23 +22,21 @@ export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get('x-forwarded-for') || 'unknown';
 
-    const { email, otp } = await req.json();
-
-    if (!email || !otp || typeof email !== 'string' || typeof otp !== 'string') {
-      return NextResponse.json({ error: 'Email and OTP are required.' }, { status: 400 });
+    const body = await req.json();
+    const parsed = otpVerifySchema.safeParse(body);
+    if (!parsed.success) {
+      return apiValidationError(parsed.error.issues.map(i => i.message).join('; '));
     }
+    const { email, otp } = parsed.data;
 
     const normalizedEmail = email.toLowerCase().trim();
 
     // Rate limit: max 5 requests per 15 minutes per IP & Email
-    const ipLimit = rateLimit(`otp-ver-ip-${ip}`, 5, 15 * 60 * 1000);
-    const emailLimit = rateLimit(`otp-ver-email-${normalizedEmail}`, 5, 15 * 60 * 1000);
+    const ipLimit = await rateLimit(`otp-ver-ip-${ip}`, 5, 15 * 60 * 1000);
+    const emailLimit = await rateLimit(`otp-ver-email-${normalizedEmail}`, 5, 15 * 60 * 1000);
 
     if (!ipLimit.success || !emailLimit.success) {
-      return NextResponse.json(
-        { error: 'Too many OTP verification attempts. Please try again in 15 minutes.' },
-        { status: 429 }
-      );
+      return apiRateLimited('Too many OTP verification attempts. Please try again in 15 minutes.');
     }
 
     const [user] = await db
@@ -52,11 +52,11 @@ export async function POST(req: NextRequest) {
       .where(eq(adminUsers.email, normalizedEmail));
 
     if (!user || user.status !== 'approved') {
-      return NextResponse.json({ error: 'No approved account found for this email.' }, { status: 404 });
+      return apiError('ACCOUNT_NOT_FOUND', 'No approved account found for this email.', 404);
     }
 
     if (!user.otpCode || !user.otpExpiresAt) {
-      return NextResponse.json({ error: 'No OTP was requested. Please request a new code.' }, { status: 400 });
+      return apiError('NO_OTP_REQUESTED', 'No OTP was requested. Please request a new code.', 400);
     }
 
     // Check expiry
@@ -65,13 +65,13 @@ export async function POST(req: NextRequest) {
         .update(adminUsers)
         .set({ otpCode: null, otpExpiresAt: null })
         .where(eq(adminUsers.id, user.id));
-      return NextResponse.json({ error: 'OTP has expired. Please request a new code.' }, { status: 400 });
+      return apiError('OTP_EXPIRED', 'OTP has expired. Please request a new code.', 400);
     }
 
     // Verify OTP
     const isValid = await bcrypt.compare(otp.trim(), user.otpCode);
     if (!isValid) {
-      return NextResponse.json({ error: 'Invalid OTP. Please check and try again.' }, { status: 400 });
+      return apiError('INVALID_OTP', 'Invalid OTP. Please check and try again.', 400);
     }
 
     // Zero-knowledge recovery: we send a notification that verification was successful.
@@ -89,9 +89,8 @@ export async function POST(req: NextRequest) {
       note: `Successful OTP verification and recovery email sent to ${normalizedEmail}`,
     });
 
-    return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error('[/api/mobile/otp/verify]', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+    return apiSuccess({ verified: true }, 'Identity verified. Recovery email sent if configured.');
+  } catch (err: unknown) {
+    return apiServerError(err);
   }
 }

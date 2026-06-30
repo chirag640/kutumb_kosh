@@ -4,13 +4,16 @@ import { db } from "@/lib/db";
 import { adminUsers, auditLog } from "@/lib/db/schema";
 import { count, desc, eq } from "drizzle-orm";
 import { Users, UserCheck, UserX, Clock, Database, Terminal, ArrowRight } from "lucide-react";
+import { createLogger } from "@/lib/logger";
 
-export const revalidate = 0; // Disable caching for dashboard
+const log = createLogger("dashboard");
+
+// Revalidate dashboard every 60 seconds instead of on every request
+export const revalidate = 60;
 
 export default async function DashboardPage() {
   // Fetch stats from DB
-  let stats = { total: 0, pending: 0, approved: 0, rejected: 0 };
-  let audits: any[] = [];
+  let stats = { total: 0, pending: 0, approved: 0, rejected: 0 };    let audits: Array<{ id: string; action: string; targetId: string | null; note: string | null; createdAt: Date | null } | { id: string; action: string; targetId: string | null; note: string | null; createdAt: Date }> = [];
   let errorMsg = "";
 
   try {
@@ -31,8 +34,10 @@ export default async function DashboardPage() {
       .from(auditLog)
       .orderBy(desc(auditLog.createdAt))
       .limit(8);
-  } catch (error: any) {
-    console.error("Dashboard stats query error:", error);
+  } catch (error: unknown) {
+    log.error("Dashboard stats query failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     errorMsg = "Database tables are not initialized or configured correctly. Please run migrations/db push.";
   }
 
@@ -99,6 +104,104 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      {/* Analytics Breakdown Card */}
+      <div className="bg-canvas rounded-xl border border-black/[0.05] p-6 shadow-sm space-y-6">
+        <h3 className="font-extrabold text-lg text-ink tracking-tight border-b border-black/[0.05] pb-4">
+          Registration Metrics & Breakdown
+        </h3>
+        
+        <div className="flex flex-col md:flex-row items-center justify-around gap-8">
+          {/* Custom SVG Donut Chart */}
+          {stats.total > 0 ? (
+            <div className="relative w-48 h-48 flex items-center justify-center">
+              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                {/* Background Ring */}
+                <circle
+                  cx="18"
+                  cy="18"
+                  r="15.915"
+                  fill="transparent"
+                  stroke="#e2e5e1"
+                  strokeWidth="3.5"
+                />
+                {/* Approved Slice */}
+                {stats.approved > 0 && (
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15.915"
+                    fill="transparent"
+                    stroke="#2ead4b"
+                    strokeWidth="3.5"
+                    strokeDasharray={`${(stats.approved / stats.total) * 100} ${100 - ((stats.approved / stats.total) * 100)}`}
+                    strokeDashoffset="0"
+                  />
+                )}
+                {/* Pending Slice */}
+                {stats.pending > 0 && (
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15.915"
+                    fill="transparent"
+                    stroke="#ffd11a"
+                    strokeWidth="3.5"
+                    strokeDasharray={`${(stats.pending / stats.total) * 100} ${100 - ((stats.pending / stats.total) * 100)}`}
+                    strokeDashoffset={`-${(stats.approved / stats.total) * 100}`}
+                  />
+                )}
+                {/* Rejected Slice */}
+                {stats.rejected > 0 && (
+                  <circle
+                    cx="18"
+                    cy="18"
+                    r="15.915"
+                    fill="transparent"
+                    stroke="#d03238"
+                    strokeWidth="3.5"
+                    strokeDasharray={`${(stats.rejected / stats.total) * 100} ${100 - ((stats.rejected / stats.total) * 100)}`}
+                    strokeDashoffset={`-${((stats.approved + stats.pending) / stats.total) * 100}`}
+                  />
+                )}
+              </svg>
+              <div className="absolute flex flex-col items-center justify-center text-center">
+                <span className="text-2xl font-black text-ink">{stats.total}</span>
+                <span className="text-[10px] text-mute font-bold uppercase tracking-wider">Total</span>
+              </div>
+            </div>
+          ) : (
+            <div className="text-mute text-sm py-12">No data available to display chart</div>
+          )}
+
+          {/* Legend Details */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full md:w-auto">
+            <div className="space-y-1.5 border-l-4 border-positive pl-4">
+              <span className="block text-[10px] font-bold text-mute uppercase tracking-wider">Approved</span>
+              <span className="block text-xl font-black">{stats.approved}</span>
+              <span className="block text-xs text-mute font-bold">
+                {stats.total > 0 ? ((stats.approved / stats.total) * 100).toFixed(1) : 0}%
+              </span>
+            </div>
+
+            <div className="space-y-1.5 border-l-4 border-warning pl-4">
+              <span className="block text-[10px] font-bold text-mute uppercase tracking-wider">Pending</span>
+              <span className="block text-xl font-black">{stats.pending}</span>
+              <span className="block text-xs text-mute font-bold">
+                {stats.total > 0 ? ((stats.pending / stats.total) * 100).toFixed(1) : 0}%
+              </span>
+            </div>
+
+            <div className="space-y-1.5 border-l-4 border-negative-darkest pl-4">
+              <span className="block text-[10px] font-bold text-mute uppercase tracking-wider">Rejected</span>
+              <span className="block text-xl font-black">{stats.rejected}</span>
+              <span className="block text-xs text-mute font-bold">
+                {stats.total > 0 ? ((stats.rejected / stats.total) * 100).toFixed(1) : 0}%
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* User request CTA panel */}
         <div className="lg:col-span-7 bg-canvas rounded-xl border border-black/[0.05] p-6 shadow-sm space-y-6">
@@ -152,7 +255,7 @@ export default async function DashboardPage() {
                       {log.action}
                     </span>
                     <span className="text-[9px] text-mute font-mono">
-                      {new Date(log.createdAt).toLocaleString()}
+                      {log.createdAt ? new Date(log.createdAt).toLocaleString() : "—"}
                     </span>
                   </div>
                   <p className="text-xs font-medium text-ink">{log.note || "Administrative action executed"}</p>

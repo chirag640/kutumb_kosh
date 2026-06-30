@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -10,24 +10,30 @@ import {
   Alert, 
   ActivityIndicator,
   ScrollView,
-  Dimensions 
+  Dimensions,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { calcDaysRemaining, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { ImportantDocument, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const TYPES = ['Aadhaar', 'PAN', 'Passport', 'Driving License', 'Vehicle RC', 'Vehicle Insurance', 'LIC Policy', 'Health Insurance', 'Term Insurance', 'Property Documents', 'Bank Passbook', 'Ration Card', 'Voter ID', 'Birth Certificate', 'Marriage Certificate', 'Other'];
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function DocumentsScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [documents, setDocuments] = useState<ImportantDocument[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   // Form states
@@ -43,6 +49,17 @@ export default function DocumentsScreen() {
   // Edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const { updateDraftField } = useFormDraft('document', {
+    holderMemberId: setHolderMemberId,
+    documentType: setDocumentType,
+    documentNumber: setDocumentNumber,
+    issueDate: setIssueDate,
+    expiryDate: setExpiryDate,
+    neverExpires: setNeverExpires,
+    physicalLocation: setPhysicalLocation,
+    notes: setNotes,
+  }, !editingId);
+
   // Reveal state
   const [revealedDocId, setRevealedDocId] = useState<string | null>(null);
 
@@ -50,9 +67,24 @@ export default function DocumentsScreen() {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && documents.length > 0) {
+      const item = documents.find(d => d.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, documents]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allDocs = await getAllRecords<ImportantDocument>('documents', cryptoKey);
       setDocuments(allDocs);
@@ -60,12 +92,15 @@ export default function DocumentsScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setHolderMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['document'];
+        if (!draft || !draft.holderMemberId) {
+          setHolderMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to load documents');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -128,6 +163,7 @@ export default function DocumentsScreen() {
         await updateRecord('documents', editingId, payload, cryptoKey, indexFields);
       } else {
         await insertRecord('documents', payload, cryptoKey, indexFields);
+        useFormDraftStore.getState().clearDraft('document');
       }
       setModalVisible(false);
       resetForm();
@@ -197,7 +233,11 @@ export default function DocumentsScreen() {
       <Text style={styles.infoBar}>Tap to edit · Long press to delete · Tap number to copy</Text>
 
       {loading && documents.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : documents.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="document-text-outline" size={64} color="#868685" />
@@ -211,6 +251,14 @@ export default function DocumentsScreen() {
           numColumns={2}
           contentContainerStyle={{ paddingBottom: 100 }}
           columnWrapperStyle={{ justifyContent: 'space-between' }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const status = getDocStatus(item);
             return (
@@ -267,7 +315,7 @@ export default function DocumentsScreen() {
                       styles.pickerChip,
                       documentType === t && styles.pickerChipActive
                     ]}
-                    onPress={() => setDocumentType(t as any)}
+                    onPress={() => { setDocumentType(t as any); updateDraftField('documentType', t); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -285,7 +333,7 @@ export default function DocumentsScreen() {
                 placeholder="Unmasked number (will be encrypted)"
                 placeholderTextColor="#868685"
                 value={documentNumber}
-                onChangeText={setDocumentNumber}
+                onChangeText={(val) => { setDocumentNumber(val); updateDraftField('documentNumber', val); }}
                 autoCapitalize="none"
               />
 
@@ -298,7 +346,7 @@ export default function DocumentsScreen() {
                       styles.pickerChip,
                       holderMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setHolderMemberId(m.localId)}
+                    onPress={() => { setHolderMemberId(m.localId); updateDraftField('holderMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -316,14 +364,14 @@ export default function DocumentsScreen() {
                 placeholder="e.g. Almirah 2 Drawer 1"
                 placeholderTextColor="#868685"
                 value={physicalLocation}
-                onChangeText={setPhysicalLocation}
+                onChangeText={(val) => { setPhysicalLocation(val); updateDraftField('physicalLocation', val); }}
               />
 
               <View style={styles.expiryToggleRow}>
                 <Text style={styles.label}>Never Expires?</Text>
                 <TouchableOpacity 
                   style={[styles.checkbox, neverExpires && styles.checkboxChecked]}
-                  onPress={() => setNeverExpires(!neverExpires)}
+                  onPress={() => { const next = !neverExpires; setNeverExpires(next); updateDraftField('neverExpires', next); }}
                 >
                   {neverExpires && <Ionicons name="checkmark" size={18} color="#0e0f0c" />}
                 </TouchableOpacity>
@@ -337,7 +385,7 @@ export default function DocumentsScreen() {
                     placeholder="2035-12-31"
                     placeholderTextColor="#868685"
                     value={expiryDate}
-                    onChangeText={setExpiryDate}
+                    onChangeText={(val) => { setExpiryDate(val); updateDraftField('expiryDate', val); }}
                   />
                 </View>
               )}
@@ -349,7 +397,7 @@ export default function DocumentsScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

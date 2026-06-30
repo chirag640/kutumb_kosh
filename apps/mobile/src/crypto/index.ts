@@ -28,10 +28,26 @@ export async function getOrCreateSalt(): Promise<Uint8Array> {
   return salt;
 }
 
-export async function deriveKey(password: string, salt: Uint8Array): Promise<CryptoKey> {
+export async function getStoredIterations(): Promise<number> {
+  try {
+    const stored = await SecureStore.getItemAsync('kk_verify_token');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object' && 'iterations' in parsed) {
+        return Number(parsed.iterations);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return 100_000; // default for existing legacy users
+}
+
+export async function deriveKey(password: string, salt: Uint8Array, iterations?: number): Promise<CryptoKey> {
+  const finalIterations = iterations !== undefined ? iterations : await getStoredIterations();
   // Pure JavaScript PBKDF2 that runs perfectly on Hermes React Native
   return await pbkdf2Async(sha256, password, salt, {
-    c: 100_000,
+    c: finalIterations,
     dkLen: 32
   });
 }
@@ -41,10 +57,10 @@ export async function deriveKey(password: string, salt: Uint8Array): Promise<Cry
  * Used to encrypt the DB URL before uploading to the admin server, so the
  * same master password can decrypt the blob on any device.
  */
-export async function deriveLoginKey(masterPassword: string): Promise<CryptoKey> {
+export async function deriveLoginKey(masterPassword: string, iterations = 600_000): Promise<CryptoKey> {
   const globalSalt = Buffer.from(GLOBAL_SALT_HEX, 'hex');
   return await pbkdf2Async(sha256, masterPassword, globalSalt, {
-    c: 100_000,
+    c: iterations,
     dkLen: 32
   });
 }
@@ -61,9 +77,9 @@ export async function verifyKey(key: CryptoKey): Promise<boolean> {
   }
 }
 
-export async function storeVerifyToken(key: CryptoKey): Promise<void> {
+export async function storeVerifyToken(key: CryptoKey, iterations = 600_000): Promise<void> {
   const encrypted = await encrypt(key, 'kutumbkosh_verify_ok');
-  await SecureStore.setItemAsync('kk_verify_token', JSON.stringify(encrypted));
+  await SecureStore.setItemAsync('kk_verify_token', JSON.stringify({ ...encrypted, iterations }));
 }
 
 // ─── Encrypt / Decrypt ────────────────────────────────────────────────────────

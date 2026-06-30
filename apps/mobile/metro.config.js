@@ -29,11 +29,20 @@ config.resolver.nodeModulesPaths = [
 // 3. Ensure Metro doesn't search up past the monorepo root
 config.resolver.disableHierarchicalLookup = true;
 
+// Exclude test directories from the Metro bundler to prevent bundle overhead and index leaks
+config.resolver.blockList = [/.*\/__tests__\/.*/];
+
 // 4. Force all react imports to use the mobile project's local React (React 19)
-// to prevent version mismatch errors (ReactCurrentDispatcher is undefined)
+// and redirect Node.js standard modules to empty mock
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === 'node') {
     return context.resolveRequest(context, moduleName, platform);
+  }
+
+  const nodeBuiltins = new Set(['fs', 'path', 'os', 'child_process', 'net', 'tls', 'crypto', 'http', 'https', 'zlib', 'stream', 'react-native-fs', 'react-native-fetch-blob', 'cross-fetch']);
+  if (nodeBuiltins.has(moduleName) && context.originModulePath && context.originModulePath.includes('alasql')) {
+    const mockPath = path.resolve(projectRoot, 'src/utils/emptyMock.js');
+    return context.resolveRequest(context, mockPath, platform);
   }
 
   if (moduleName === 'react' || moduleName.startsWith('react/')) {

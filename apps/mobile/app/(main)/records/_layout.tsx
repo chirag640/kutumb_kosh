@@ -5,6 +5,8 @@ export default function RecordsLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
+        gestureEnabled: true,
+        animation: 'slide_from_right',
       }}
     />
   );

@@ -1,0 +1,573 @@
+openapi: "3.0.3"
+info:
+  title: KutumbKosh Admin API
+  description: |
+    Backend API for the KutumbKosh family treasury mobile app.
+
+    ## Response Format
+
+    All API endpoints use a standardized response format:
+
+    **Success (2xx):**
+    ```json
+    { "success": true, "data": { ... }, "message": "optional message" }
+    ```
+
+    **Error (4xx/5xx):**
+    ```json
+    { "success": false, "error": { "code": "ERROR_CODE", "message": "Human-readable message" }, "details": {} }
+    ```
+
+    ## Authentication
+
+    The JWT token from `POST /api/mobile/login` must be sent as `Authorization: Bearer <token>` header
+    for authenticated endpoints (`upload-db-url`).
+
+    ## Rate Limiting
+
+    All endpoints are rate-limited per IP using database-backed sliding windows.
+    Exceeded limits return HTTP 429 with a `RATE_LIMITED` error code.
+  version: "1.0.0"
+  contact:
+    name: KutumbKosh Team
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://kutumbkosh.example.com
+    description: Production server
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      description: |
+        Simple health check endpoint for monitoring and uptime tracking.
+        No authentication required.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp, uptime, environment, version]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok]
+                    example: "ok"
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2026-06-27T12:00:00.000Z"
+                  uptime:
+                    type: number
+                    description: Server uptime in seconds
+                    example: 3600.5
+                  environment:
+                    type: string
+                    enum: [development, production, test]
+                    example: "development"
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /api/mobile/login:
+    post:
+      summary: Mobile login
+      description: |
+        Authenticates a user with their email and master password.
+
+        The master password is verified against a server-side bcrypt hash.
+        On success, returns a JWT session token (valid for 7 days) and
+        the user's encrypted DB URL blob (null on first login).
+
+        **Rate-limited:** 5 requests per 15 minutes per IP.
+      operationId: mobileLogin
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, masterPassword]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's registered email (case-insensitive, trimmed)
+                  example: "user@example.com"
+                masterPassword:
+                  type: string
+                  description: Master password generated during admin approval
+                  example: "KK-ABCdef1234@#"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [name, encryptedDbUrl, token]
+                        properties:
+                          name:
+                            type: string
+                            description: User's display name
+                            example: "Rahul Sharma"
+                          encryptedDbUrl:
+                            type: string
+                            nullable: true
+                            description: |
+                              AES-256-GCM encrypted JSON blob containing the SQLite DB URL.
+                              Null on first login (before device uploads its DB URL).
+                            example: '{"iv":"abc...","tag":"def...","data":"ghi..."}'
+                          token:
+                            type: string
+                            description: JWT session token (Bearer auth, 7-day expiry)
+                            example: "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VySWQiOiIifQ.signature"
+        "400":
+          description: Validation error or uninitialized credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                ValidationError:
+                  summary: Validation error
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: "Email is required; Master password is required"
+                CredentialsNotInitialized:
+                  summary: Credentials not set up
+                  value:
+                    success: false
+                    error:
+                      code: CREDENTIALS_NOT_INITIALIZED
+                      message: "Credentials not initialized. Please request admin to resend credentials."
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                AuthFailed:
+                  summary: Invalid email or password
+                  value:
+                    success: false
+                    error:
+                      code: AUTH_FAILED
+                      message: "Invalid email or master password."
+        "403":
+          description: Account not approved or suspended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                AccountSuspended:
+                  summary: Account suspended
+                  value:
+                    success: false
+                    error:
+                      code: ACCOUNT_SUSPENDED
+                      message: "Your account has been suspended by the administrator."
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/mobile/otp/request:
+    post:
+      summary: Request OTP for credential recovery
+      description: |
+        Generates a 6-digit OTP, bcrypt-hashes it, stores it with a 10-minute expiry,
+        and emails it to the user.
+
+        **Always returns success** to prevent email enumeration — the caller cannot
+        distinguish between a registered and unregistered email.
+
+        **Rate-limited:** 5 requests per 15 minutes per IP.
+        **Requires SMTP configured** in production — returns 503 if SMTP is not set up.
+      operationId: otpRequest
+      tags: [Auth, Recovery]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's registered email (case-insensitive)
+                  example: "user@example.com"
+      responses:
+        "200":
+          description: |
+            Success (OTP sent or suppressed for unregistered email).
+            The response body includes `otpSent` to indicate whether an actual email was sent.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          otpSent:
+                            type: boolean
+                            description: |
+                              Whether an OTP was actually sent.
+                              `false` if the email doesn't belong to a registered approved user
+                              (prevents email enumeration).
+                            example: true
+                      message:
+                        type: string
+                        example: "OTP sent to your email if registered."
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitResponse"
+        "503":
+          description: SMTP not configured (production only)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - example:
+                      success: false
+                      error:
+                        code: SMTP_NOT_CONFIGURED
+                        message: "OTP service is unavailable. Please contact support."
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/mobile/otp/verify:
+    post:
+      summary: Verify OTP for credential recovery
+      description: |
+        Verifies the 6-digit OTP (with expiry check) and sends a recovery
+        confirmation email to the user. Zero-knowledge policy: the server
+        does NOT reveal the master password — it only sends a notification
+        instructing the user to check their existing device.
+
+        **Rate-limited:** 5 requests per 15 minutes per IP AND per email.
+      operationId: otpVerify
+      tags: [Auth, Recovery]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: User's registered email (case-insensitive)
+                  example: "user@example.com"
+                otp:
+                  type: string
+                  description: 6-digit OTP received via email
+                  minLength: 6
+                  maxLength: 6
+                  example: "483921"
+      responses:
+        "200":
+          description: |
+            OTP verified successfully. A recovery confirmation email has been
+            sent (if SMTP is configured).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          verified:
+                            type: boolean
+                            example: true
+                      message:
+                        type: string
+                        example: "Identity verified. Recovery email sent if configured."
+        "400":
+          description: OTP expired, invalid, or no OTP requested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                OtpExpired:
+                  summary: OTP expired
+                  value:
+                    success: false
+                    error:
+                      code: OTP_EXPIRED
+                      message: "OTP has expired. Please request a new code."
+                InvalidOtp:
+                  summary: Invalid OTP
+                  value:
+                    success: false
+                    error:
+                      code: INVALID_OTP
+                      message: "Invalid OTP. Please check and try again."
+        "404":
+          description: No approved account found for this email
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - example:
+                      success: false
+                      error:
+                        code: ACCOUNT_NOT_FOUND
+                        message: "No approved account found for this email."
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RateLimitResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/mobile/upload-db-url:
+    post:
+      summary: Upload encrypted DB URL
+      description: |
+        Called by the mobile app after successful onboarding to store the
+        encrypted SQLite database URL on the server.
+
+        The `encryptedDbUrl` is an opaque JSON blob encrypted with the user's
+        master-password-derived key. The server NEVER decrypts this value —
+        it only stores and returns it on subsequent logins.
+
+        **Requires JWT authentication:** `Authorization: Bearer <token>`
+      operationId: uploadDbUrl
+      tags: [Sync]
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, encryptedDbUrl]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Must match the authenticated user's email
+                  example: "user@example.com"
+                encryptedDbUrl:
+                  type: string
+                  maxLength: 4096
+                  description: |
+                    AES-256-GCM encrypted JSON blob containing the SQLite DB URL.
+                    Encrypted client-side with the user's master-password-derived key.
+                  example: '{"iv":"abc123...","tag":"def456...","data":"ghi789..."}'
+      responses:
+        "200":
+          description: DB URL uploaded successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          updated:
+                            type: boolean
+                            enum: [true]
+                            example: true
+                      message:
+                        type: string
+                        example: "DB URL uploaded successfully."
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Missing or invalid JWT token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - example:
+                      success: false
+                      error:
+                        code: UNAUTHORIZED
+                        message: "Session token required."
+        "403":
+          description: Account mismatch or forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                IdentityMismatch:
+                  summary: Email does not match token
+                  value:
+                    success: false
+                    error:
+                      code: FORBIDDEN
+                      message: "Account identity mismatch."
+                AccountSuspended:
+                  summary: Account suspended
+                  value:
+                    success: false
+                    error:
+                      code: FORBIDDEN
+                      message: "Your account has been suspended."
+        "404":
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - example:
+                      success: false
+                      error:
+                        code: NOT_FOUND
+                        message: "Account not found."
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token obtained from `POST /api/mobile/login`.
+        Format: `Authorization: Bearer <token>`
+        Token expiry: 7 days.
+
+  schemas:
+    SuccessResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+          description: Always `true` for successful responses
+        data:
+          type: object
+          description: Response payload (varies by endpoint)
+        message:
+          type: string
+          description: Optional human-readable message
+      example:
+        success: true
+        data: {}
+        message: "Operation completed successfully."
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable error code
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              description: Human-readable error message
+              example: "Email is required."
+        details:
+          description: Optional additional error context
+      example:
+        success: false
+        error:
+          code: VALIDATION_ERROR
+          message: "Invalid input."
+
+    ValidationErrorResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: "Email is required; Master password is required"
+
+    RateLimitResponse:
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - properties:
+            error:
+              properties:
+                code:
+                  enum: [RATE_LIMITED]
+        - example:
+            success: false
+            error:
+              code: RATE_LIMITED
+              message: "Too many login attempts. Please try again in 15 minutes."
+
+  responses:
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - example:
+                  success: false
+                  error:
+                    code: INTERNAL_ERROR
+                    message: "Internal server error."
+
+  # ─── Error Code Reference ──────────────────────────────────────────────────
+  # These are documented inline in each endpoint's response section.
+  # For a summary, see the error-codes.md companion file.

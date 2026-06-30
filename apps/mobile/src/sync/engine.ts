@@ -1,9 +1,12 @@
 import { Platform } from 'react-native';
-import { db } from '../db';
+import { db, assertTableAllowed } from '../db';
 import { getPendingSyncRecords, markSynced } from '../db/crud';
 import { getDBUrl, getOrCreateDeviceId, decrypt, type CryptoKey } from '../crypto';
 import { useSyncStore } from '../store/syncStore';
 import { useAuthStore } from '../store/authStore';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('sync');
 
 const ALL_TABLES = [
   'family_members', 'income_entries', 'expense_entries', 'bank_accounts',
@@ -25,7 +28,7 @@ export type SyncType = 'manual' | 'scheduled' | 'on_open';
 
 export async function performSync(type: SyncType): Promise<{ success: boolean; error?: string }> {
   if (Platform.OS === 'web') {
-    console.log('[Web Sync Mock] Sync complete (no database sync on web).');
+    log.info('[Web Sync Mock] Sync complete (no database sync on web).');
     return { success: true };
   }
   const syncStore = useSyncStore.getState();
@@ -52,14 +55,15 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
       const pending = await getPendingSyncRecords(table);
       if (pending.length === 0) continue;
 
-      const toUpsert = pending.filter((r: any) => !r.deleted_at);
-      const toDelete = pending.filter((r: any) => r.deleted_at).map((r: any) => r.local_id);
+      const toUpsert = pending.filter((r: { deleted_at: string | null }) => !r.deleted_at);
+      const toDelete = pending.filter((r: { deleted_at: string | null }) => r.deleted_at).map((r: { local_id: string }) => r.local_id);
 
       // Upsert
       if (toUpsert.length > 0) {
         const indexFields = TABLE_INDEX_FIELDS[table] || [];
         for (const row of toUpsert) {
           const indexValues = indexFields.reduce<Record<string, unknown>>((acc, field) => {
+            assertTableAllowed(table);
             const localRow = db.getFirstSync(
               `SELECT ${field} FROM ${table} WHERE local_id = ?`, [row.local_id]
             ) as Record<string, unknown> | null;
@@ -68,23 +72,25 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
           }, {});
 
           const colList = ['local_id', 'iv', 'data', 'synced_at', ...indexFields];
-          const valPlaceholders = colList.map((_: any, i: number) => `$${i + 1}`).join(', ');
+          const valPlaceholders = colList.map((_: string, i: number) => `$${i + 1}`).join(', ');
           const updateSet = ['iv', 'data', 'synced_at', ...indexFields]
-            .map((c: any, i: number) => `${c} = $${i + 2}`).join(', ');
+            .map((c: string, i: number) => `${c} = $${i + 2}`).join(', ');
 
+          assertTableAllowed(table);
           await client.query(
             `INSERT INTO kk_${table} (${colList.join(', ')}) VALUES (${valPlaceholders})
              ON CONFLICT (local_id) DO UPDATE SET ${updateSet}`,
             [row.local_id, row.iv, row.data, syncedAt, ...indexFields.map(f => indexValues[f])]
           );
         }
-        markSynced(table, toUpsert.map((r: any) => r.local_id));
+        markSynced(table, toUpsert.map((r: { local_id: string }) => r.local_id));
         totalPushed += toUpsert.length;
       }
 
       // Soft delete
       if (toDelete.length > 0) {
-        const placeholders = toDelete.map((_: any, i: number) => `$${i + 1}`).join(', ');
+        const placeholders = toDelete.map((_: string, i: number) => `$${i + 1}`).join(', ');
+        assertTableAllowed(table);
         await client.query(
           `UPDATE kk_${table} SET deleted_at = NOW() WHERE local_id IN (${placeholders})`,
           toDelete
@@ -101,7 +107,7 @@ export async function performSync(type: SyncType): Promise<{ success: boolean; e
       if (pullRes.success) {
         pulledCount = pullRes.count;
       } else {
-        console.warn('[Sync] Pull from remote failed during bidirectional sync:', pullRes.error);
+        log.warn('[Sync] Pull from remote failed during bidirectional sync:', pullRes.error);
       }
     }
 
@@ -243,7 +249,7 @@ export async function setupRemoteDatabase(dbUrl: string): Promise<{ success: boo
 // Pull and restore data from Postgres to local SQLite using a lastSyncedAt watermark (Delta Sync)
 export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ success: boolean; count: number; error?: string }> {
   if (Platform.OS === 'web') {
-    console.log('[Web Sync Mock] Restore complete (no database restore on web).');
+    log.info('[Web Sync Mock] Restore complete (no database restore on web).');
     return { success: true, count: 0 };
   }
   try {
@@ -262,8 +268,8 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
       if (logRow && logRow.synced_at) {
         lastSyncedAt = logRow.synced_at;
       }
-    } catch (e) {
-      console.log('Failed to fetch last sync time:', e);
+    } catch {
+      // Silently fall back to epoch — first sync or no local logs
     }
 
     for (const table of ALL_TABLES) {
@@ -277,6 +283,7 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
       for (const row of res.rows) {
         // 1. Process soft deletes
         if (row.deleted_at) {
+          assertTableAllowed(table);
           db.runSync(
             `UPDATE ${table} SET deleted_at = ?, sync_status = 'synced' WHERE local_id = ?`,
             [row.deleted_at, row.local_id]
@@ -287,6 +294,7 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
 
         // 2. Insert or replace into local SQLite
         // First check if the local record exists, is pending, and the remote update is newer (conflict)
+        assertTableAllowed(table);
         const localRecords = (await db.getAllSync(
           `SELECT sync_status, updated_at FROM ${table} WHERE local_id = ?`, [row.local_id]
         )) as { sync_status: string; updated_at: string }[];
@@ -306,16 +314,16 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
             if (localDataEnc) {
               try {
                 localDecrypted = await decrypt(key, { iv: localDataEnc.iv, data: localDataEnc.data });
-              } catch (e) {
-                console.log('Failed decrypt local conflict', e);
+              } catch {
+                // Decryption may fail for corrupted records — use empty data
               }
             }
 
             let remoteDecrypted = '{}';
             try {
               remoteDecrypted = await decrypt(key, { iv: row.iv, data: row.data });
-            } catch (e) {
-              console.log('Failed decrypt remote conflict', e);
+            } catch {
+              // Decryption may fail for corrupted records — use empty data
             }
 
             db.runSync(
@@ -329,6 +337,7 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
         }
 
         // 3. We run a query to insert/replace
+        assertTableAllowed(table);
         // We need to parse unencrypted index fields
         // Since we don't want to re-encrypt and change IV, we can just insert the exact iv and data we fetched
         // Index fields can be extracted by decrypting the data
@@ -367,6 +376,7 @@ export async function pullFromRemote(dbUrl: string, key: CryptoKey): Promise<{ s
     await client.end();
     return { success: true, count: restoreCount };
   } catch (err) {
+    log.error('[Sync] pullFromRemote error:', err);
     return { success: false, count: 0, error: err instanceof Error ? err.message : 'Restore failed' };
   }
 }

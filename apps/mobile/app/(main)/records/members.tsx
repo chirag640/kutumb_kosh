@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -10,21 +10,27 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { calcDaysRemaining, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const RELATIONSHIPS = ['Self', 'Spouse', 'Father', 'Mother', 'Son', 'Daughter', 'Brother', 'Sister', 'Other'];
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'];
 
 export default function FamilyMembersScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   // Edit mode
@@ -38,22 +44,46 @@ export default function FamilyMembersScreen() {
   const [bloodGroup, setBloodGroup] = useState('A+');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('member', {
+    name: setName,
+    relationship: setRelationship,
+    dateOfBirth: setDateOfBirth,
+    mobile: setMobile,
+    bloodGroup: setBloodGroup,
+    notes: setNotes,
+  }, !editingId);
+
   useFocusEffect(
     useCallback(() => {
       loadMembers();
     }, [cryptoKey])
   );
 
-  const loadMembers = async () => {
+  useEffect(() => {
+    if (params.editId && members.length > 0) {
+      const item = members.find(m => m.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, members]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadMembers(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadMembers = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
     } catch (err) {
       Alert.alert('Error', 'Failed to load family members');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -111,6 +141,7 @@ export default function FamilyMembersScreen() {
         await updateRecord('family_members', editingId, payload, cryptoKey);
       } else {
         await insertRecord('family_members', payload, cryptoKey);
+        useFormDraftStore.getState().clearDraft('member');
       }
       setModalVisible(false);
       resetForm();
@@ -177,12 +208,24 @@ export default function FamilyMembersScreen() {
       <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && members.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : (
         <FlatList
           data={members}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const bdayDays = getBdayCountdown(item.dateOfBirth);
             return (
@@ -250,7 +293,7 @@ export default function FamilyMembersScreen() {
                 placeholder="Name"
                 placeholderTextColor="#868685"
                 value={name}
-                onChangeText={setName}
+                onChangeText={(val) => { setName(val); updateDraftField('name', val); }}
               />
 
               <Text style={styles.label}>Relationship</Text>
@@ -259,7 +302,7 @@ export default function FamilyMembersScreen() {
                   <TouchableOpacity
                     key={rel}
                     style={[styles.pickerChip, relationship === rel && styles.pickerChipActive]}
-                    onPress={() => setRelationship(rel as FamilyMember['relationship'])}
+                    onPress={() => { setRelationship(rel as FamilyMember['relationship']); updateDraftField('relationship', rel); }}
                   >
                     <Text style={[styles.pickerChipText, relationship === rel && styles.pickerChipTextActive]}>
                       {rel}
@@ -274,7 +317,7 @@ export default function FamilyMembersScreen() {
                 placeholder="1995-05-15"
                 placeholderTextColor="#868685"
                 value={dateOfBirth}
-                onChangeText={setDateOfBirth}
+                onChangeText={(val) => { setDateOfBirth(val); updateDraftField('dateOfBirth', val); }}
               />
 
               <Text style={styles.label}>Mobile Number</Text>
@@ -284,7 +327,7 @@ export default function FamilyMembersScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="phone-pad"
                 value={mobile}
-                onChangeText={setMobile}
+                onChangeText={(val) => { setMobile(val); updateDraftField('mobile', val); }}
               />
 
               <Text style={styles.label}>Blood Group</Text>
@@ -293,7 +336,7 @@ export default function FamilyMembersScreen() {
                   <TouchableOpacity
                     key={bg}
                     style={[styles.pickerChip, bloodGroup === bg && styles.pickerChipActive]}
-                    onPress={() => setBloodGroup(bg)}
+                    onPress={() => { setBloodGroup(bg); updateDraftField('bloodGroup', bg); }}
                   >
                     <Text style={[styles.pickerChipText, bloodGroup === bg && styles.pickerChipTextActive]}>
                       {bg}
@@ -309,7 +352,7 @@ export default function FamilyMembersScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

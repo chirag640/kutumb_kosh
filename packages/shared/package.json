@@ -3,5 +3,20 @@
   "version": "1.0.0",
   "main": "./src/types.ts",
   "types": "./src/types.ts",
+  "exports": {
+    ".": "./src/types.ts",
+    "./validators": "./src/validators.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0",
+    "typescript": "^5.4.5"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "private": true
 }

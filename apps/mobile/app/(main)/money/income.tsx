@@ -9,7 +9,9 @@ import {
   TextInput, 
   ScrollView, 
   Alert, 
-  ActivityIndicator 
+  ActivityIndicator,
+  RefreshControl,
+  Vibration,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,7 +19,9 @@ import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { formatINR, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { IncomeEntry, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const SOURCES = ['Salary', 'Business', 'Farming', 'Rent', 'Interest/FD', 'Pension', 'Other'];
 
@@ -26,7 +30,9 @@ export default function IncomeScreen() {
   const [incomes, setIncomes] = useState<IncomeEntry[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
+  const { setDraft, clearDraft } = useFormDraftStore();
 
   // Form inputs
   const [amount, setAmount] = useState('');
@@ -36,15 +42,34 @@ export default function IncomeScreen() {
   const [notes, setNotes] = useState('');
   const [isRecurring, setIsRecurring] = useState(false);
 
+  // Load draft on mount
+  useEffect(() => {
+    const draft = useFormDraftStore.getState().drafts['income'];
+    if (draft) {
+      if (draft.amount !== undefined) setAmount(draft.amount);
+      if (draft.source !== undefined) setSource(draft.source);
+      if (draft.memberId !== undefined) setMemberId(draft.memberId);
+      if (draft.date !== undefined) setDate(draft.date);
+      if (draft.notes !== undefined) setNotes(draft.notes);
+      if (draft.isRecurring !== undefined) setIsRecurring(draft.isRecurring);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       loadData();
     }, [cryptoKey])
   );
 
-  const loadData = async () => {
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allIncomes = await getAllRecords<IncomeEntry>('income_entries', cryptoKey);
       // Sort by date descending
@@ -54,13 +79,16 @@ export default function IncomeScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['income'];
+        if (!draft || !draft.memberId) {
+          setMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       console.error(err);
       Alert.alert('Error', 'Failed to load income records');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -93,11 +121,13 @@ export default function IncomeScreen() {
         member_idx: memberId,
       });
 
+      Vibration.vibrate(20);
       setModalVisible(false);
       // Reset form
       setAmount('');
       setNotes('');
       setIsRecurring(false);
+      clearDraft('income');
       
       loadData();
     } catch (err) {
@@ -157,9 +187,15 @@ export default function IncomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.toggleBtn} 
-            onPress={() => router.replace('/money/expenses')}
+            onPress={() => router.replace('/money')}
           >
             <Text style={styles.toggleTextInactive}>Expenses</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={styles.toggleBtn} 
+            onPress={() => router.replace('/money/tax')}
+          >
+            <Text style={styles.toggleTextInactive}>Tax</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
@@ -168,8 +204,10 @@ export default function IncomeScreen() {
       </View>
 
       {loading && incomes.length === 0 ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#0e0f0c" />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </View>
       ) : incomes.length === 0 ? (
         <View style={styles.centerContainer}>
@@ -182,6 +220,14 @@ export default function IncomeScreen() {
           data={getGroupedIncomes()}
           keyExtractor={(item) => item.month}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => (
             <View>
               <Text style={styles.monthHeader}>{item.month}</Text>
@@ -232,7 +278,7 @@ export default function IncomeScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={amount}
-                onChangeText={setAmount}
+                onChangeText={(val) => { setAmount(val); setDraft('income', { amount: val }); }}
               />
 
               <Text style={styles.label}>Earner / Family Member</Text>
@@ -244,7 +290,7 @@ export default function IncomeScreen() {
                       styles.pickerChip,
                       memberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setMemberId(m.localId)}
+                    onPress={() => { setMemberId(m.localId); setDraft('income', { memberId: m.localId }); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -265,7 +311,7 @@ export default function IncomeScreen() {
                       styles.pickerChip,
                       source === src && styles.pickerChipActive
                     ]}
-                    onPress={() => setSource(src)}
+                    onPress={() => { setSource(src); setDraft('income', { source: src }); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -283,7 +329,7 @@ export default function IncomeScreen() {
                 placeholder="2026-06-20"
                 placeholderTextColor="#868685"
                 value={date}
-                onChangeText={setDate}
+                onChangeText={(val) => { setDate(val); setDraft('income', { date: val }); }}
               />
 
               <Text style={styles.label}>Notes</Text>
@@ -293,14 +339,14 @@ export default function IncomeScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); setDraft('income', { notes: val }); }}
               />
 
               <View style={styles.recurringRow}>
                 <Text style={styles.label}>Is Recurring?</Text>
                 <TouchableOpacity 
                   style={[styles.checkbox, isRecurring && styles.checkboxChecked]}
-                  onPress={() => setIsRecurring(!isRecurring)}
+                  onPress={() => { const next = !isRecurring; setIsRecurring(next); setDraft('income', { isRecurring: next }); }}
                 >
                   {isRecurring && <Ionicons name="checkmark" size={18} color="#0e0f0c" />}
                 </TouchableOpacity>

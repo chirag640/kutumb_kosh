@@ -21,6 +21,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { Buffer } from 'buffer';
 import { useAuthStore } from '../../../src/store/authStore';
 import { getOrCreateSalt, deriveKey, encrypt } from '../../../src/crypto';
+import { useIsMounted } from '../../../src/hooks/useIsMounted';
 
 export default function SecuritySettingsScreen() {
   const { cryptoKey } = useAuthStore();
@@ -28,6 +29,7 @@ export default function SecuritySettingsScreen() {
   const [biometricsEnabled, setBiometricsEnabled] = useState(false);
   const [hasHardware, setHasHardware] = useState(false);
   const [lockTimeout, setLockTimeout] = useState(0);
+  const isMounted = useIsMounted();
 
   // Form states
   const [oldPin, setOldPin] = useState('');
@@ -46,6 +48,7 @@ export default function SecuritySettingsScreen() {
 
   const loadLockTimeout = async () => {
     const val = await SecureStore.getItemAsync('kk_lock_timeout') ?? '0';
+    if (!isMounted()) return;
     setLockTimeout(parseInt(val, 10));
   };
 
@@ -58,10 +61,12 @@ export default function SecuritySettingsScreen() {
   const checkBiometrics = async () => {
     const hardware = await LocalAuthentication.hasHardwareAsync();
     const enrolled = await LocalAuthentication.isEnrolledAsync();
+    if (!isMounted()) return;
     setHasHardware(hardware && enrolled);
     
     // Check if biometric key is active in SecureStore
     const bioKey = await SecureStore.getItemAsync('kk_master_key_biometric');
+    if (!isMounted()) return;
     setBiometricsEnabled(!!bioKey);
   };
 
@@ -76,27 +81,35 @@ export default function SecuritySettingsScreen() {
           promptMessage: 'Enable Biometric Unlock',
         });
 
+        if (!isMounted()) return;
         if (auth.success) {
           // Store the derived master key in biometric-protected SecureStore
           const masterKeyHex = Buffer.from(cryptoKey).toString('hex');
           await SecureStore.setItemAsync('kk_master_key_biometric', masterKeyHex, {
             requireAuthentication: true,
           });
-          setBiometricsEnabled(true);
-          Alert.alert('Success', 'Biometric unlock enabled successfully.');
+          if (isMounted()) {
+            setBiometricsEnabled(true);
+            Alert.alert('Success', 'Biometric unlock enabled successfully.');
+          }
         } else {
           setBiometricsEnabled(false);
         }
       } else {
         // Delete biometric key
         await SecureStore.deleteItemAsync('kk_master_key_biometric');
-        setBiometricsEnabled(false);
-        Alert.alert('Disabled', 'Biometric unlock disabled.');
+        if (isMounted()) {
+          setBiometricsEnabled(false);
+          Alert.alert('Disabled', 'Biometric unlock disabled.');
+        }
       }
     } catch (err) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Failed to configure biometrics.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -116,6 +129,7 @@ export default function SecuritySettingsScreen() {
       const salt = await getOrCreateSalt();
       const storedPin = await SecureStore.getItemAsync('kk_pin');
 
+      if (!isMounted()) return;
       if (oldPin !== storedPin) {
         Alert.alert('Incorrect PIN', 'Current PIN is incorrect.');
         setLoading(false);
@@ -132,14 +146,19 @@ export default function SecuritySettingsScreen() {
       await SecureStore.setItemAsync('kk_encrypted_master_key_pin', JSON.stringify(encryptedMasterKey));
       await SecureStore.setItemAsync('kk_pin', newPin);
 
-      Alert.alert('Success', 'Unlock PIN updated successfully.');
-      setOldPin('');
-      setNewPin('');
-      setConfirmNewPin('');
+      if (isMounted()) {
+        Alert.alert('Success', 'Unlock PIN updated successfully.');
+        setOldPin('');
+        setNewPin('');
+        setConfirmNewPin('');
+      }
     } catch (err) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Failed to update PIN.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -148,14 +167,17 @@ export default function SecuritySettingsScreen() {
     const hardware = await LocalAuthentication.hasHardwareAsync();
     const enrolled = await LocalAuthentication.isEnrolledAsync();
     
+    if (!isMounted()) return;
     if (hardware && enrolled) {
       try {
         const auth = await LocalAuthentication.authenticateAsync({
           promptMessage: 'Authenticate to Reveal Master Password',
         });
         
+        if (!isMounted()) return;
         if (auth.success) {
           const pass = await SecureStore.getItemAsync('kk_master_password');
+          if (!isMounted()) return;
           if (pass) {
             setRevealedPassword(pass);
             return;
@@ -169,8 +191,10 @@ export default function SecuritySettingsScreen() {
     }
     
     // Fall back to PIN verification modal
-    setPinConfirmInput('');
-    setRevealModalVisible(true);
+    if (isMounted()) {
+      setPinConfirmInput('');
+      setRevealModalVisible(true);
+    }
   };
 
   const handleVerifyPinAndReveal = async () => {
@@ -181,8 +205,10 @@ export default function SecuritySettingsScreen() {
     
     try {
       const storedPin = await SecureStore.getItemAsync('kk_pin');
+      if (!isMounted()) return;
       if (pinConfirmInput === storedPin) {
         const pass = await SecureStore.getItemAsync('kk_master_password');
+        if (!isMounted()) return;
         if (pass) {
           setRevealedPassword(pass);
           setRevealModalVisible(false);
@@ -194,6 +220,7 @@ export default function SecuritySettingsScreen() {
         Alert.alert('Incorrect PIN', 'The unlock PIN you entered is incorrect.');
       }
     } catch (err) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Failed to verify PIN.');
     }
   };

@@ -36,8 +36,8 @@ export default function SettingsIndexScreen() {
           `SELECT COUNT(*) as count FROM sync_conflicts WHERE resolved = 0`
         ) as { count: number } | null;
         setConflictCount(res?.count ?? 0);
-      } catch (e) {
-        console.log('Failed to fetch conflict count', e);
+      } catch {
+        // Silently handle — conflict count defaults to 0
       }
     }, [])
   );
@@ -84,7 +84,13 @@ export default function SettingsIndexScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Security & Database</Text>
         
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/security')}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={() => router.push('/settings/security')}
+          accessibilityLabel="PIN and Biometrics"
+          accessibilityRole="button"
+          accessibilityHint="Configure lock PIN, biometric unlock options, and screen timeouts"
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="lock-closed" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <Text style={styles.rowLabel}>PIN & Biometrics</Text>
@@ -92,7 +98,13 @@ export default function SettingsIndexScreen() {
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/sync')}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={() => router.push('/settings/sync')}
+          accessibilityLabel="Cloud Backup and Sync"
+          accessibilityRole="button"
+          accessibilityHint="Manage remote database syncing, scheduling, and sync triggers"
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="sync" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <Text style={styles.rowLabel}>Cloud Backup & Sync</Text>
@@ -100,7 +112,13 @@ export default function SettingsIndexScreen() {
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/conflicts')}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={() => router.push('/settings/conflicts')}
+          accessibilityLabel="Conflict Resolution"
+          accessibilityRole="button"
+          accessibilityHint="Review or resolve database record conflicts between local and remote vaults"
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="git-compare" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <Text style={styles.rowLabel}>Conflict Resolution</Text>
@@ -113,10 +131,16 @@ export default function SettingsIndexScreen() {
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/settings/export')}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={() => router.push('/settings/export')}
+          accessibilityLabel="Backup, Export, and Restore"
+          accessibilityRole="button"
+          accessibilityHint="Export local records to encrypted backups or restore from an existing backup file"
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="cloud-download" size={20} color="#0e0f0c" style={styles.rowIcon} />
-            <Text style={styles.rowLabel}>Export Data (Excel/PDF)</Text>
+            <Text style={styles.rowLabel}>Backup, Export & Restore</Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
@@ -157,7 +181,13 @@ export default function SettingsIndexScreen() {
           />
         </View>
 
-        <TouchableOpacity style={styles.row} onPress={handleLanguageChange}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={handleLanguageChange}
+          accessibilityLabel="Language"
+          accessibilityRole="button"
+          accessibilityHint={`Change app language. Current: ${language === 'en' ? 'English' : language === 'gu' ? 'Gujarati' : 'Hindi'}`}
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="language" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <View>
@@ -172,7 +202,13 @@ export default function SettingsIndexScreen() {
           <Ionicons name="chevron-forward" size={20} color="#868685" />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.row} onPress={handleThemeChange}>
+        <TouchableOpacity 
+          style={styles.row} 
+          onPress={handleThemeChange}
+          accessibilityLabel="App Theme"
+          accessibilityRole="button"
+          accessibilityHint={`Change visual mode. Current: ${theme === 'light' ? 'Light Mode' : theme === 'dark' ? 'Dark Mode' : 'System Default'}`}
+        >
           <View style={styles.rowLeft}>
             <Ionicons name="color-palette" size={20} color="#0e0f0c" style={styles.rowIcon} />
             <View>
@@ -190,7 +226,13 @@ export default function SettingsIndexScreen() {
 
       <View style={styles.spacer} />
       
-      <TouchableOpacity style={styles.lockBtn} onPress={handleLockApp}>
+      <TouchableOpacity 
+        style={styles.lockBtn} 
+        onPress={handleLockApp}
+        accessibilityLabel="Lock Vault"
+        accessibilityRole="button"
+        accessibilityHint="Instantly locks the application vault and clears encryption key from memory"
+      >
         <Ionicons name="log-out" size={20} color="#d03238" style={{ marginRight: 8 }} />
         <Text style={styles.lockBtnText}>Lock Vault</Text>
       </TouchableOpacity>

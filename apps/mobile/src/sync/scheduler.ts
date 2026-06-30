@@ -221,7 +221,6 @@ export async function registerEODSync(): Promise<void> {
     const status = await BackgroundFetch.getStatusAsync();
     if (status === BackgroundFetch.BackgroundFetchStatus.Restricted ||
         status === BackgroundFetch.BackgroundFetchStatus.Denied) {
-      console.log('Background fetch is disabled or restricted on this device');
       return;
     }
 
@@ -232,7 +231,7 @@ export async function registerEODSync(): Promise<void> {
         stopOnTerminate: false,
         startOnBoot: true,
       });
-      console.log('Registered background sync task successfully');
+
     }
   } catch (error) {
     console.error('Failed to register background sync task:', error);

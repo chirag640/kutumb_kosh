@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,24 +9,30 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { calcLoanRemainingMonths, calcLoanProgress, formatINR } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { Loan, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const TYPES = ['Home Loan', 'Car Loan', 'Personal Loan', 'Gold Loan', 'Kisan Credit Card', 'Business Loan', 'Education Loan', 'Other'];
 const STATUSES = ['Active', 'Closed', 'Restructured'];
 
 export default function LoansScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [loans, setLoans] = useState<Loan[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -43,6 +49,20 @@ export default function LoansScreen() {
   const [status, setStatus] = useState<Loan['status']>('Active');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('loan', {
+    loanType: setLoanType,
+    lender: setLender,
+    borrowerMemberId: setBorrowerMemberId,
+    originalAmount: setOriginalAmount,
+    outstandingAmount: setOutstandingAmount,
+    emi: setEmi,
+    interestRate: setInterestRate,
+    startDate: setStartDate,
+    endDate: setEndDate,
+    status: setStatus,
+    notes: setNotes,
+  }, !editingId);
+
   // Total burden
   const [monthlyEmiBurden, setMonthlyEmiBurden] = useState(0);
 
@@ -50,9 +70,24 @@ export default function LoansScreen() {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && loans.length > 0) {
+      const item = loans.find(l => l.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, loans]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allLoans = await getAllRecords<Loan>('loans', cryptoKey);
       setLoans(allLoans);
@@ -60,7 +95,10 @@ export default function LoansScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setBorrowerMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['loan'];
+        if (!draft || !draft.borrowerMemberId) {
+          setBorrowerMemberId(allMembers[0].localId);
+        }
       }
 
       // Calculate total EMI burden for Active loans
@@ -72,7 +110,7 @@ export default function LoansScreen() {
     } catch (err) {
       Alert.alert('Error', 'Failed to load loan records');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -139,6 +177,7 @@ export default function LoansScreen() {
         await updateRecord('loans', editingId, payload, cryptoKey);
       } else {
         await insertRecord('loans', payload, cryptoKey);
+        useFormDraftStore.getState().clearDraft('loan');
       }
 
       setModalVisible(false);
@@ -198,7 +237,11 @@ export default function LoansScreen() {
       </View>
 
       {loading && loans.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : loans.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="card-outline" size={64} color="#868685" />
@@ -210,6 +253,14 @@ export default function LoansScreen() {
           data={loans}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const repaidAmount = item.originalAmount - item.outstandingAmount;
             const progress = (repaidAmount / item.originalAmount) * 100;
@@ -269,7 +320,7 @@ export default function LoansScreen() {
                 placeholder="e.g. HDFC Bank"
                 placeholderTextColor="#868685"
                 value={lender}
-                onChangeText={setLender}
+                onChangeText={(val) => { setLender(val); updateDraftField('lender', val); }}
               />
 
               <Text style={styles.label}>Borrower Member</Text>
@@ -281,7 +332,7 @@ export default function LoansScreen() {
                       styles.pickerChip,
                       borrowerMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setBorrowerMemberId(m.localId)}
+                    onPress={() => { setBorrowerMemberId(m.localId); updateDraftField('borrowerMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -302,7 +353,7 @@ export default function LoansScreen() {
                       styles.pickerChip,
                       loanType === t && styles.pickerChipActive
                     ]}
-                    onPress={() => setLoanType(t as any)}
+                    onPress={() => { setLoanType(t as any); updateDraftField('loanType', t); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -321,7 +372,7 @@ export default function LoansScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={originalAmount}
-                onChangeText={setOriginalAmount}
+                onChangeText={(val) => { setOriginalAmount(val); updateDraftField('originalAmount', val); }}
               />
 
               <Text style={styles.label}>Outstanding Principal (INR)</Text>
@@ -331,7 +382,7 @@ export default function LoansScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={outstandingAmount}
-                onChangeText={setOutstandingAmount}
+                onChangeText={(val) => { setOutstandingAmount(val); updateDraftField('outstandingAmount', val); }}
               />
 
               <Text style={styles.label}>Monthly EMI (INR)</Text>
@@ -341,7 +392,7 @@ export default function LoansScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={emi}
-                onChangeText={setEmi}
+                onChangeText={(val) => { setEmi(val); updateDraftField('emi', val); }}
               />
 
               <Text style={styles.label}>Interest Rate (%)</Text>
@@ -351,7 +402,7 @@ export default function LoansScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={interestRate}
-                onChangeText={setInterestRate}
+                onChangeText={(val) => { setInterestRate(val); updateDraftField('interestRate', val); }}
               />
 
               <Text style={styles.label}>Start Date (YYYY-MM-DD)</Text>
@@ -360,7 +411,7 @@ export default function LoansScreen() {
                 placeholder="2026-01-01"
                 placeholderTextColor="#868685"
                 value={startDate}
-                onChangeText={setStartDate}
+                onChangeText={(val) => { setStartDate(val); updateDraftField('startDate', val); }}
               />
 
               <Text style={styles.label}>End Date / Closure (YYYY-MM-DD)</Text>
@@ -369,7 +420,7 @@ export default function LoansScreen() {
                 placeholder="2036-01-01"
                 placeholderTextColor="#868685"
                 value={endDate}
-                onChangeText={setEndDate}
+                onChangeText={(val) => { setEndDate(val); updateDraftField('endDate', val); }}
               />
 
               <Text style={styles.label}>Status</Text>
@@ -381,7 +432,7 @@ export default function LoansScreen() {
                       styles.pickerChip,
                       status === st && styles.pickerChipActive
                     ]}
-                    onPress={() => setStatus(st as any)}
+                    onPress={() => { setStatus(st as any); updateDraftField('status', st); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -400,7 +451,7 @@ export default function LoansScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

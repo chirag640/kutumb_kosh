@@ -26,6 +26,7 @@ export default function RecordsMenuScreen() {
     property: 0,
     goals: 0,
     members: 0,
+    investments: 0,
   });
 
   useFocusEffect(
@@ -47,6 +48,7 @@ export default function RecordsMenuScreen() {
       const properties = await getAllRecords('property', cryptoKey);
       const goals = await getAllRecords('savings_goals', cryptoKey);
       const members = await getAllRecords('family_members', cryptoKey);
+      const investments = await getAllRecords('investments', cryptoKey);
 
       setCounts({
         banks: banks.length,
@@ -58,6 +60,7 @@ export default function RecordsMenuScreen() {
         property: properties.length,
         goals: goals.length,
         members: members.length,
+        investments: investments.length,
       });
     } catch (err) {
       console.error(err);
@@ -76,18 +79,25 @@ export default function RecordsMenuScreen() {
     { id: 'fdrd', label: 'FD & RD Tracker', route: '/(main)/records/fdrd', icon: 'trending-up', count: counts.fdrd, bg: '#DCFCE7', color: '#166534' },
     { id: 'property', label: 'Property Register', route: '/(main)/records/property', icon: 'home', count: counts.property, bg: '#FEF9C3', color: '#854D0E' },
     { id: 'goals', label: 'Savings Goals', route: '/(main)/records/goals', icon: 'ribbon', count: counts.goals, bg: '#FCE7F3', color: '#db2777' },
+    { id: 'investments', label: 'Mutual Funds & Stocks', route: '/(main)/records/investments', icon: 'stats-chart', count: counts.investments, bg: '#E0F2FE', color: '#0284c7' },
   ];
 
   const summaryList = [
     { id: 'cashflow', label: 'Cash Flow Summary', route: '/(main)/records/cashflow', icon: 'bar-chart', bg: '#ffffff' },
     { id: 'annual', label: 'Annual summary', route: '/(main)/records/annual', icon: 'pie-chart', bg: '#ffffff' },
+    { id: 'insights', label: 'Spending Insights', route: '/(main)/records/insights', icon: 'analytics', bg: '#ffffff' },
   ];
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Financial Vaults</Text>
-        <Text style={styles.subtitle}>All family records are double-encrypted at rest.</Text>
+      <View style={styles.headerRow}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.title}>Financial Vaults</Text>
+          <Text style={styles.subtitle}>All family records are double-encrypted at rest.</Text>
+        </View>
+        <TouchableOpacity style={styles.searchBtn} onPress={() => router.push('/(main)/records/search')}>
+          <Ionicons name="search" size={22} color="#0e0f0c" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -139,9 +149,23 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8ebe6',
     padding: 16,
   },
-  header: {
+  headerRow: {
     marginTop: 40,
     marginBottom: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerLeft: {
+    flex: 1,
+    marginRight: 16,
+  },
+  searchBtn: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#0e0f0c',
+    borderRadius: 9999,
+    padding: 10,
   },
   title: {
     fontSize: 28,

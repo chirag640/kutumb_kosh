@@ -20,7 +20,27 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "shortcuts": [
+        {
+          "id": "log_income",
+          "title": "Log Income",
+          "icon": "shortcut_income",
+          "intent": {
+            "action": "android.intent.action.VIEW",
+            "data": "kutumbkosh://money/income"
+          }
+        },
+        {
+          "id": "log_expense",
+          "title": "Log Expense",
+          "icon": "shortcut_expense",
+          "intent": {
+            "action": "android.intent.action.VIEW",
+            "data": "kutumbkosh://money"
+          }
+        }
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -44,7 +64,8 @@
       [
         "expo-sharing",
         {}
-      ]
+      ],
+      "@sentry/react-native"
     ],
     "experiments": {
       "typedRoutes": true

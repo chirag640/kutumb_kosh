@@ -20,6 +20,7 @@ import { useSyncStore } from '../../../src/store/syncStore';
 import { performSync, pullFromRemote, setupRemoteDatabase } from '../../../src/sync/engine';
 import { getDBUrl, storeDBUrl, enforceSSL } from '../../../src/crypto';
 import { db } from '../../../src/db';
+import { useIsMounted } from '../../../src/hooks/useIsMounted';
 
 export default function SyncSettingsScreen() {
   const { cryptoKey } = useAuthStore();
@@ -27,8 +28,10 @@ export default function SyncSettingsScreen() {
   const [dbUrl, setDbUrl] = useState('');
   const [dbLoading, setDbLoading] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [pendingBreakdown, setPendingBreakdown] = useState<Record<string, number>>({});
   const [conflictCount, setConflictCount] = useState(0);
   const [autoSync, setAutoSync] = useState(true);
+  const isMounted = useIsMounted();
 
   useEffect(() => {
     loadSyncData();
@@ -36,10 +39,12 @@ export default function SyncSettingsScreen() {
 
   const loadSyncData = async () => {
     const url = await getDBUrl();
+    if (!isMounted()) return;
     if (url) setDbUrl(url);
 
     if (Platform.OS === 'web') {
       setPendingCount(0);
+      setPendingBreakdown({});
       setConflictCount(0);
       return;
     }
@@ -51,21 +56,29 @@ export default function SyncSettingsScreen() {
       'fdrd_entries', 'property', 'savings_goals',
     ];
     let totalPending = 0;
+    const breakdown: Record<string, number> = {};
     try {
       tables.forEach(table => {
         const row = db.getFirstSync(
           `SELECT COUNT(*) as count FROM ${table} WHERE sync_status = 'pending'`
         ) as { count: number } | null;
-        if (row) totalPending += row.count;
+        if (row) {
+          totalPending += row.count;
+          if (row.count > 0) {
+            breakdown[table] = row.count;
+          }
+        }
       });
       setPendingCount(totalPending);
+      setPendingBreakdown(breakdown);
 
       const conflictRow = db.getFirstSync(
         `SELECT COUNT(*) as count FROM sync_conflicts WHERE resolved = 0`
       ) as { count: number } | null;
+      if (!isMounted()) return;
       if (conflictRow) setConflictCount(conflictRow.count);
-    } catch (err) {
-      console.log('Error counting pending syncs', err);
+    } catch {
+      // Silently handle — pending count will be 0
     }
   };
 
@@ -74,6 +87,7 @@ export default function SyncSettingsScreen() {
     setSyncing(true);
     try {
       const res = await performSync('manual');
+      if (!isMounted()) return;
       if (res.success) {
         Alert.alert('Sync Complete', 'All pending records pushed to Neon successfully.');
         loadSyncData();
@@ -81,9 +95,12 @@ export default function SyncSettingsScreen() {
         Alert.alert('Sync Failed', res.error || 'Check internet connection and DB URL.');
       }
     } catch (e) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'An unexpected error occurred during sync.');
     } finally {
-      setSyncing(false);
+      if (isMounted()) {
+        setSyncing(false);
+      }
     }
   };
 
@@ -96,6 +113,7 @@ export default function SyncSettingsScreen() {
     setDbLoading(true);
     try {
       const res = await setupRemoteDatabase(formattedUrl);
+      if (!isMounted()) return;
       if (res.success) {
         setDbUrl(formattedUrl);
         await storeDBUrl(formattedUrl);
@@ -104,9 +122,12 @@ export default function SyncSettingsScreen() {
         Alert.alert('Connection Failed', res.error || 'Failed to connect to PostgreSQL.');
       }
     } catch (err) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Failed to update database configuration.');
     } finally {
-      setDbLoading(false);
+      if (isMounted()) {
+        setDbLoading(false);
+      }
     }
   };
 
@@ -124,12 +145,14 @@ export default function SyncSettingsScreen() {
             setSyncing(true);
             try {
               const url = await getDBUrl();
+              if (!isMounted()) return;
               if (!url) {
                 Alert.alert('Error', 'Please configure your Database URL first.');
                 setSyncing(false);
                 return;
               }
               const res = await pullFromRemote(url, cryptoKey);
+              if (!isMounted()) return;
               if (res.success) {
                 Alert.alert('Restore Complete', `Successfully imported ${res.count} records from Neon database.`);
                 loadSyncData();
@@ -137,9 +160,12 @@ export default function SyncSettingsScreen() {
                 Alert.alert('Restore Failed', res.error || 'Failed to restore database.');
               }
             } catch (err) {
+              if (!isMounted()) return;
               Alert.alert('Error', 'An error occurred during restore.');
             } finally {
-              setSyncing(false);
+              if (isMounted()) {
+                setSyncing(false);
+              }
             }
           }
         }
@@ -176,6 +202,18 @@ export default function SyncSettingsScreen() {
 
         <View style={styles.pendingContainer}>
           <Text style={styles.pendingText}>Pending Changes: {pendingCount} entries</Text>
+          {pendingCount > 0 && Object.keys(pendingBreakdown).length > 0 && (
+            <View style={styles.breakdownBox}>
+              {Object.entries(pendingBreakdown).map(([table, count]) => (
+                <View key={table} style={styles.breakdownItem}>
+                  <Text style={styles.breakdownTableText}>
+                    • {table.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                  </Text>
+                  <Text style={styles.breakdownCountText}>{count} pending</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         <TouchableOpacity 
@@ -320,6 +358,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#454745',
+    marginBottom: 6,
+  },
+  breakdownBox: {
+    backgroundColor: '#f6f8f5',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e5e1',
+    padding: 10,
+    marginTop: 6,
+  },
+  breakdownItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  breakdownTableText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#454745',
+  },
+  breakdownCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#868685',
   },
   syncBtn: {
     backgroundColor: '#9fe870',

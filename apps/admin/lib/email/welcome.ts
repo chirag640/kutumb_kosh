@@ -1,4 +1,8 @@
 import nodemailer from 'nodemailer';
+import { isSmtpConfigured as checkSmtp, getEnv } from '@/lib/env';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('email:welcome');
 
 export function generateMasterPassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#$%';
@@ -6,19 +10,21 @@ export function generateMasterPassword(): string {
 }
 
 function createTransporter() {
+  const env = getEnv();
   return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.SMTP_PORT || '465', 10),
-    secure: process.env.SMTP_SECURE !== 'false',
+    host: env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(env.SMTP_PORT || '465', 10),
+    secure: env.SMTP_SECURE !== 'false',
     auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      user: env.SMTP_USER,
+      pass: env.SMTP_PASS,
     },
   });
 }
 
+/** Re-export the canonical isSmtpConfigured from env validation. */
 export function isSmtpConfigured(): boolean {
-  return !!(process.env.SMTP_USER && process.env.SMTP_PASS);
+  return checkSmtp();
 }
 
 export async function sendWelcomeEmail(
@@ -70,23 +76,23 @@ export async function sendWelcomeEmail(
   `;
 
   if (!isSmtpConfigured()) {
-    console.warn('================================================================');
-    console.warn('⚠️  SMTP not configured — SMTP_USER or SMTP_PASS is missing in .env');
-    console.warn(`   User:     ${user.email}`);
-    console.warn(`   Password: ${masterPassword}`);
-    console.warn('================================================================');
+    log.warn('SMTP not configured — welcome email will not be sent', {
+      email: user.email,
+      password: process.env.NODE_ENV !== 'production' ? masterPassword : undefined,
+    });
   } else {
     try {
       const info = await createTransporter().sendMail({
-        from: `"KutumbKosh Treasury" <${process.env.SMTP_USER}>`,
+        from: `"KutumbKosh Treasury" <${getEnv().SMTP_USER}>`,
         to: user.email,
         subject: 'Welcome to KutumbKosh — Your Master Access Password',
         html: htmlContent,
       });
-      console.log(`[email] Welcome email sent to ${user.email} — MessageID: ${info.messageId}`);
-    } catch (err: any) {
-      console.error(`[email] FAILED to send welcome email to ${user.email}:`, err.message);
-      throw new Error(`Email delivery failed: ${err.message}`);
+      log.info('Welcome email sent', { email: user.email, messageId: info.messageId });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown email error';
+      log.error('Failed to send welcome email', { email: user.email, error: message });
+      throw new Error(`Email delivery failed: ${message}`);
     }
   }
 
@@ -136,24 +142,24 @@ export async function sendRecoveryConfirmationEmail(
   `;
 
   if (!isSmtpConfigured()) {
-    console.warn('================================================================');
-    console.warn('⚠️  SMTP not configured — SMTP_USER or SMTP_PASS is missing in .env');
-    console.warn(`   User:     ${user.email}`);
-    console.warn('   Action:   Zero-Knowledge Identity Verification Notification');
-    console.warn('================================================================');
+    log.warn('SMTP not configured — recovery confirmation email will not be sent', {
+      email: user.email,
+    });
     return;
   }
 
   try {
+    const env = getEnv();
     const info = await createTransporter().sendMail({
-      from: `"KutumbKosh Treasury" <${process.env.SMTP_USER}>`,
+      from: `"KutumbKosh Treasury" <${env.SMTP_USER}>`,
       to: user.email,
       subject: 'KutumbKosh — Identity Verified',
       html: htmlContent,
     });
-    console.log(`[email] Security email sent to ${user.email} — MessageID: ${info.messageId}`);
-  } catch (err: any) {
-    console.error(`[email] FAILED to send security email to ${user.email}:`, err.message);
-    throw new Error(`Security email delivery failed: ${err.message}`);
+    log.info('Recovery confirmation email sent', { email: user.email, messageId: info.messageId });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown security email error';
+    log.error('Failed to send recovery confirmation email', { email: user.email, error: message });
+    throw new Error(`Security email delivery failed: ${message}`);
   }
 }

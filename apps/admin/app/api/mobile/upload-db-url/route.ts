@@ -1,8 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { adminUsers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { verifyToken } from '@/lib/jwt';
+import { apiSuccess, apiError, apiUnauthorized, apiForbidden, apiNotFound, apiServerError, apiValidationError } from '@/lib/api-response';
+import { uploadDbUrlSchema } from '@kutumbkosh/shared/validators';
 
 /**
  * POST /api/mobile/upload-db-url
@@ -17,27 +19,24 @@ export async function POST(req: NextRequest) {
   try {
     const authHeader = req.headers.get('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Unauthorized. Session token required.' }, { status: 401 });
+      return apiUnauthorized('Session token required.');
     }
 
     const token = authHeader.substring(7);
     const decoded = verifyToken(token);
     if (!decoded) {
-      return NextResponse.json({ error: 'Unauthorized. Invalid or expired session.' }, { status: 401 });
+      return apiUnauthorized('Invalid or expired session.');
     }
 
-    const { email, encryptedDbUrl } = await req.json();
-
-    if (!email || !encryptedDbUrl) {
-      return NextResponse.json({ error: 'Email and encryptedDbUrl are required.' }, { status: 400 });
+    const body = await req.json();
+    const parsed = uploadDbUrlSchema.safeParse(body);
+    if (!parsed.success) {
+      return apiValidationError(parsed.error.issues.map(i => i.message).join('; '));
     }
+    const { email, encryptedDbUrl } = parsed.data;
 
     if (decoded.email.toLowerCase().trim() !== email.toLowerCase().trim()) {
-      return NextResponse.json({ error: 'Forbidden. Account identity mismatch.' }, { status: 403 });
-    }
-
-    if (typeof encryptedDbUrl !== 'string' || encryptedDbUrl.length > 4096) {
-      return NextResponse.json({ error: 'Invalid encryptedDbUrl format.' }, { status: 400 });
+      return apiForbidden('Account identity mismatch.');
     }
 
     const [user] = await db
@@ -46,15 +45,15 @@ export async function POST(req: NextRequest) {
       .where(eq(adminUsers.email, email.toLowerCase().trim()));
 
     if (!user) {
-      return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
+      return apiNotFound('Account not found.');
     }
 
     if (user.status === 'suspended') {
-      return NextResponse.json({ error: 'Your account has been suspended.' }, { status: 403 });
+      return apiForbidden('Your account has been suspended.');
     }
 
     if (user.status !== 'approved') {
-      return NextResponse.json({ error: 'Account not approved.' }, { status: 403 });
+      return apiForbidden('Account not approved.');
     }
 
     await db
@@ -62,9 +61,8 @@ export async function POST(req: NextRequest) {
       .set({ encryptedDbUrl, lastSeen: new Date() })
       .where(eq(adminUsers.id, user.id));
 
-    return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error('[/api/mobile/upload-db-url]', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+    return apiSuccess({ updated: true }, 'DB URL uploaded successfully.');
+  } catch (err: unknown) {
+    return apiServerError(err);
   }
 }

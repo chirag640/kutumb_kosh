@@ -1,5 +1,8 @@
 import { Platform } from 'react-native';
 import * as ExpoSecureStore from 'expo-secure-store';
+import { createLogger } from './logger';
+
+const log = createLogger('secureStore');
 
 export async function getItemAsync(
   key: string,
@@ -9,7 +12,7 @@ export async function getItemAsync(
     try {
       return typeof window !== 'undefined' ? localStorage.getItem(key) : null;
     } catch (e) {
-      console.warn('localStorage get failed:', e);
+      log.warn('localStorage get failed:', e);
       return null;
     }
   }
@@ -27,7 +30,7 @@ export async function setItemAsync(
         localStorage.setItem(key, value);
       }
     } catch (e) {
-      console.warn('localStorage set failed:', e);
+      log.warn('localStorage set failed:', e);
     }
     return;
   }
@@ -44,7 +47,7 @@ export async function deleteItemAsync(
         localStorage.removeItem(key);
       }
     } catch (e) {
-      console.warn('localStorage delete failed:', e);
+      log.warn('localStorage delete failed:', e);
     }
     return;
   }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -10,21 +10,27 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { BankAccount, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const TYPES = ['Savings', 'Current', 'Salary', 'Joint', 'NRI'];
 
 export default function BanksScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [banks, setBanks] = useState<BankAccount[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   // Edit mode — null means "add new"
@@ -38,26 +44,53 @@ export default function BanksScreen() {
   const [balance, setBalance] = useState('');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('bank', {
+    bankName: setBankName,
+    accountType: setAccountType,
+    ownerMemberId: setOwnerMemberId,
+    accountNumber: setAccountNumber,
+    balance: setBalance,
+    notes: setNotes,
+  }, !editingId);
+
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && banks.length > 0) {
+      const item = banks.find(b => b.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, banks]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allBanks = await getAllRecords<BankAccount>('bank_accounts', cryptoKey);
       setBanks(allBanks);
 
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
-      if (allMembers.length > 0 && !ownerMemberId) {
-        setOwnerMemberId(allMembers[0].localId);
+      if (allMembers.length > 0) {
+        const draft = useFormDraftStore.getState().drafts['bank'];
+        if (!draft || !draft.ownerMemberId) {
+          setOwnerMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to load bank accounts');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -110,6 +143,7 @@ export default function BanksScreen() {
         await updateRecord('bank_accounts', editingId, payload, cryptoKey);
       } else {
         await insertRecord('bank_accounts', payload, cryptoKey);
+        useFormDraftStore.getState().clearDraft('bank');
       }
       setModalVisible(false);
       resetForm();
@@ -162,7 +196,11 @@ export default function BanksScreen() {
       <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && banks.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : banks.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="business-outline" size={64} color="#868685" />
@@ -174,6 +212,14 @@ export default function BanksScreen() {
           data={banks}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => (
             <TouchableOpacity
               style={styles.card}
@@ -221,7 +267,7 @@ export default function BanksScreen() {
                 placeholder="e.g. State Bank of India"
                 placeholderTextColor="#868685"
                 value={bankName}
-                onChangeText={setBankName}
+                onChangeText={(val) => { setBankName(val); updateDraftField('bankName', val); }}
               />
 
               <Text style={styles.label}>Account Owner</Text>
@@ -230,7 +276,7 @@ export default function BanksScreen() {
                   <TouchableOpacity
                     key={m.localId}
                     style={[styles.pickerChip, ownerMemberId === m.localId && styles.pickerChipActive]}
-                    onPress={() => setOwnerMemberId(m.localId)}
+                    onPress={() => { setOwnerMemberId(m.localId); updateDraftField('ownerMemberId', m.localId); }}
                   >
                     <Text style={[styles.pickerChipText, ownerMemberId === m.localId && styles.pickerChipTextActive]}>
                       {m.name}
@@ -245,7 +291,7 @@ export default function BanksScreen() {
                   <TouchableOpacity
                     key={type}
                     style={[styles.pickerChip, accountType === type && styles.pickerChipActive]}
-                    onPress={() => setAccountType(type as BankAccount['accountType'])}
+                    onPress={() => { setAccountType(type as BankAccount['accountType']); updateDraftField('accountType', type); }}
                   >
                     <Text style={[styles.pickerChipText, accountType === type && styles.pickerChipTextActive]}>
                       {type}
@@ -261,7 +307,7 @@ export default function BanksScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={accountNumber}
-                onChangeText={setAccountNumber}
+                onChangeText={(val) => { setAccountNumber(val); updateDraftField('accountNumber', val); }}
               />
 
               <Text style={styles.label}>Current Balance (INR)</Text>
@@ -271,7 +317,7 @@ export default function BanksScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={balance}
-                onChangeText={setBalance}
+                onChangeText={(val) => { setBalance(val); updateDraftField('balance', val); }}
               />
 
               <Text style={styles.label}>Notes</Text>
@@ -281,7 +327,7 @@ export default function BanksScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

@@ -1,5 +1,12 @@
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
+import { createLogger } from "@/lib/logger";
+import { getEnv } from "@/lib/env";
+
+const log = createLogger("auth");
+
+// Session timeout: 24 hours (in seconds)
+const SESSION_MAX_AGE = 24 * 60 * 60;
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
@@ -14,21 +21,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           return null;
         }
 
-        const adminEmail = process.env.ADMIN_EMAIL;
-        const adminPassword = process.env.ADMIN_PASSWORD;
+        const { ADMIN_EMAIL: adminEmail, ADMIN_PASSWORD: adminPassword } = getEnv();
 
         if (!adminEmail || !adminPassword) {
-          console.error("[auth] ADMIN_EMAIL or ADMIN_PASSWORD env var is not set.");
+          log.error("ADMIN_EMAIL or ADMIN_PASSWORD env var is not set");
           return null;
         }
 
         if (credentials.email !== adminEmail) {
-          console.warn("[auth] Login failed: email mismatch.");
+          log.warn("Login failed: email mismatch", { email: credentials.email as string });
           return null;
         }
 
         if (credentials.password !== adminPassword) {
-          console.warn(`[auth] Login failed: password mismatch for ${adminEmail}.`);
+          log.warn("Login failed: password mismatch", { email: adminEmail });
           return null;
         }
 
@@ -44,16 +50,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   pages: {
     signIn: "/login",
   },
+  session: {
+    strategy: "jwt",
+    maxAge: SESSION_MAX_AGE,
+  },
   callbacks: {
     jwt({ token, user }) {
       if (user) {
-        token.role = (user as any).role;
+        token.role = (user as { role?: string })?.role;
       }
       return token;
     },
     session({ session, token }) {
       if (session.user) {
-        (session.user as any).role = token.role;
+        (session.user as { role?: string }).role = token.role as string | undefined;
       }
       return session;
     },

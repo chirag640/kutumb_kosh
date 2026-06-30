@@ -1,7 +1,16 @@
 "use client";
 
-import React, { useState, useTransition } from "react";
-import { approveUser, rejectUser, resendCredentials, toggleUserSuspension } from "./actions";
+import React, { useState, useEffect, useTransition } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import {
+  approveUser,
+  rejectUser,
+  resendCredentials,
+  toggleUserSuspension,
+  getUserAuditLogs,
+  bulkApproveUsers,
+  bulkSuspendUsers,
+} from "./actions";
 import {
   UserCheck,
   UserX,
@@ -16,6 +25,9 @@ import {
   RefreshCw,
   RotateCcw,
   TriangleAlert,
+  Download,
+  Activity,
+  History,
 } from "lucide-react";
 
 interface User {
@@ -33,15 +45,77 @@ interface User {
 
 interface UsersTableProps {
   initialUsers: User[];
+  totalCount: number;
   isSmtpConfigured?: boolean;
 }
 
-export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTableProps) {
+export function UsersTable({ initialUsers, totalCount, isSmtpConfigured = true }: UsersTableProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  // URL State values
+  const filter = (searchParams.get("status") || "all") as "all" | "pending" | "approved" | "rejected";
+  const currentPage = Number(searchParams.get("page")) || 1;
+
+  // Local state for users and action handling
   const [users, setUsers] = useState<User[]>(initialUsers);
-  const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
-  const [search, setSearch] = useState("");
   const [isPending, startTransition] = useTransition();
   const [actionUserId, setActionUserId] = useState<string | null>(null);
+
+  // Sync state with parent server component updates
+  useEffect(() => {
+    setUsers(initialUsers);
+  }, [initialUsers]);
+
+  // Search input debouncer local state
+  const [searchInput, setSearchInput] = useState(searchParams.get("search") || "");
+
+  // Update parameters utility
+  const updateQuery = (key: string, value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set(key, value);
+    if (key !== 'page') {
+      params.set('page', '1'); // Reset to page 1 on filter/search change
+    }
+    router.push(`${pathname}?${params.toString()}`);
+  };
+
+  // Sync local input with query param when it changes externally
+  useEffect(() => {
+    setSearchInput(searchParams.get("search") || "");
+  }, [searchParams]);
+
+  // Debounced search trigger (500ms)
+  useEffect(() => {
+    const delayDebounceFn = setTimeout(() => {
+      const currentSearch = searchParams.get("search") || "";
+      if (searchInput !== currentSearch) {
+        updateQuery("search", searchInput);
+      }
+    }, 500);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [searchInput]);
+
+  // Bulk selection state
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+
+  // Timeline modal state
+  const [activeTimelineUser, setActiveTimelineUser] = useState<User | null>(null);
+  const [timelineLogs, setTimelineLogs] = useState<any[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+
+  // Bulk approvals credential reveal state
+  const [bulkApproveRevealModal, setBulkApproveRevealModal] = useState<{
+    isOpen: boolean;
+    results: Array<{ userId: string; email: string; masterPassword?: string; warning?: string }>;
+  }>({ isOpen: false, results: [] });
+
+  // Reset selections when search/filter changes
+  useEffect(() => {
+    setSelectedUserIds([]);
+  }, [searchParams]);
 
   // ── Credential reveal modal (approve + resend) ──────────────────────────────
   const [revealModal, setRevealModal] = useState<{
@@ -184,7 +258,7 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
           return;
         }
         setUsers((prev) =>
-          prev.map((u) => (u.id === userId ? { ...u, status: result.status as any } : u))
+          prev.map((u) => (u.id === userId ? { ...u, status: result.status as User['status'] } : u))
         );
       } catch (err) {
         console.error("Failed to toggle suspension:", err);
@@ -195,16 +269,137 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
     });
   };
 
-  // ── Filtering & searching ────────────────────────────────────────────────────
-  const filteredUsers = users.filter((user) => {
-    const matchesFilter = filter === "all" ? true : user.status === filter;
-    const q = search.toLowerCase();
-    const matchesSearch =
-      user.name.toLowerCase().includes(q) ||
-      user.email.toLowerCase().includes(q) ||
-      (user.familyName && user.familyName.toLowerCase().includes(q));
-    return matchesFilter && matchesSearch;
-  });
+  // ── Bulk selection handlers ──────────────────────────────────────────────────
+  const handleToggleSelect = (userId: string) => {
+    setSelectedUserIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedUserIds(filteredUsers.map((u) => u.id));
+    } else {
+      setSelectedUserIds([]);
+    }
+  };
+
+  const handleBulkApprove = () => {
+    if (selectedUserIds.length === 0) return;
+    if (!confirm(`Are you sure you want to approve ${selectedUserIds.length} selected users?`)) return;
+
+    startTransition(async () => {
+      try {
+        const res = await bulkApproveUsers(selectedUserIds);
+        if (res?.error) {
+          alert(res.error);
+          return;
+        }
+
+        setUsers((prev) =>
+          prev.map((u) =>
+            selectedUserIds.includes(u.id) ? { ...u, status: "approved", approvedAt: new Date() } : u
+          )
+        );
+
+        setSelectedUserIds([]);
+
+        if (res?.results && res.results.length > 0) {
+          setBulkApproveRevealModal({
+            isOpen: true,
+            results: res.results
+          });
+        } else {
+          alert("All selected users approved successfully!");
+        }
+      } catch (err) {
+        console.error("Bulk approval failed:", err);
+        alert("An error occurred during bulk approval.");
+      }
+    });
+  };
+
+  const handleBulkSuspend = () => {
+    if (selectedUserIds.length === 0) return;
+    if (!confirm(`Are you sure you want to suspend ${selectedUserIds.length} selected users?`)) return;
+
+    startTransition(async () => {
+      try {
+        const res = await bulkSuspendUsers(selectedUserIds);
+        if (res?.error) {
+          alert(res.error);
+          return;
+        }
+
+        setUsers((prev) =>
+          prev.map((u) =>
+            selectedUserIds.includes(u.id) ? { ...u, status: "suspended" } : u
+          )
+        );
+
+        setSelectedUserIds([]);
+        alert("All selected users suspended successfully!");
+      } catch (err) {
+        console.error("Bulk suspension failed:", err);
+        alert("An error occurred during bulk suspension.");
+      }
+    });
+  };
+
+  // ── User Activity Timeline Fetcher ──────────────────────────────────────────
+  const handleViewTimeline = async (user: User) => {
+    setActiveTimelineUser(user);
+    setTimelineLoading(true);
+    setTimelineLogs([]);
+    try {
+      const res = await getUserAuditLogs(user.id);
+      if (res?.success && res.logs) {
+        setTimelineLogs(res.logs);
+      } else {
+        alert(res?.error || "Failed to load audit logs.");
+      }
+    } catch (err) {
+      console.error("Failed to load user timeline logs:", err);
+      alert("Failed to load timeline logs.");
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
+
+  const handleExportCSV = () => {
+    const headers = ["ID", "Name", "Email", "Family Name", "Member Count", "Status", "Joined At", "Approved At", "Last Seen", "App Version"];
+    const rows = filteredUsers.map((user) => [
+      user.id,
+      user.name,
+      user.email,
+      user.familyName || "",
+      user.memberCount || "",
+      user.status || "",
+      user.joinedAt ? new Date(user.joinedAt).toISOString() : "",
+      user.approvedAt ? new Date(user.approvedAt).toISOString() : "",
+      user.lastSeen ? new Date(user.lastSeen).toISOString() : "",
+      user.appVersion || ""
+    ]);
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) => row.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `kutumb_kosh_users_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Since pagination, filtering, and search are handled server-side,
+  // the `users` state holds the correct matching set for the current page.
+  const filteredUsers = users;
 
   // ── Status badge helper ──────────────────────────────────────────────────────
   const StatusBadge = ({ status }: { status: User["status"] }) => {
@@ -235,6 +430,9 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
     return null;
   };
 
+  const totalPages = Math.ceil(totalCount / 10);
+  const paginatedUsers = users;
+
   return (
     <div className="space-y-6">
       {!isSmtpConfigured && (
@@ -259,28 +457,69 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
           <input
             type="text"
             placeholder="Search by name, email, family..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-canvas-soft border border-ink/10 rounded-lg text-sm text-ink focus:outline-none focus:border-ink transition-all"
           />
         </div>
 
-        <div className="flex gap-1.5 bg-canvas-soft p-1 rounded-xl w-full md:w-auto">
-          {(["all", "pending", "approved", "rejected"] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setFilter(tab)}
-              className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex-1 md:flex-initial ${
-                filter === tab
-                  ? "bg-ink text-primary shadow"
-                  : "text-mute hover:text-ink"
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto items-center">
+          <div className="flex gap-1.5 bg-canvas-soft p-1 rounded-xl w-full sm:w-auto">
+            {(["all", "pending", "approved", "rejected"] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => updateQuery("status", tab)}
+                className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all flex-1 md:flex-initial ${
+                  filter === tab
+                    ? "bg-ink text-primary shadow"
+                    : "text-mute hover:text-ink"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          <button
+            onClick={handleExportCSV}
+            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-canvas-soft border border-ink/10 rounded-xl text-xs font-bold uppercase tracking-wider text-mute hover:text-ink hover:border-ink/20 transition-all w-full sm:w-auto h-9"
+            title="Export filtered list as CSV"
+          >
+            <Download size={14} />
+            <span>Export CSV</span>
+          </button>
         </div>
       </div>
+
+      {/* Bulk Operations Bar */}
+      {selectedUserIds.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-primary-pale border border-primary/20 p-4 rounded-xl shadow-sm text-sm">
+          <div className="flex items-center gap-2 font-bold text-ink">
+            <span className="bg-ink text-primary text-xs px-2.5 py-1 rounded-full">{selectedUserIds.length}</span>
+            <span>users selected</span>
+          </div>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleBulkApprove}
+              className="flex-1 sm:flex-initial px-4 py-2 bg-ink text-primary rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-black/80 transition-all"
+            >
+              Bulk Approve
+            </button>
+            <button
+              onClick={handleBulkSuspend}
+              className="flex-1 sm:flex-initial px-4 py-2 bg-negative-bg text-canvas rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-negative-bg/90 transition-all"
+            >
+              Bulk Suspend
+            </button>
+            <button
+              onClick={() => setSelectedUserIds([])}
+              className="flex-1 sm:flex-initial px-4 py-2 bg-canvas border border-ink/10 text-body rounded-lg font-bold text-xs uppercase tracking-wider hover:bg-canvas-soft transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Users Table */}
       <div className="bg-canvas rounded-xl border border-black/[0.05] shadow-sm overflow-hidden">
@@ -295,6 +534,17 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
             <table className="w-full border-collapse text-left">
               <thead>
                 <tr className="bg-canvas-soft border-b border-black/[0.05] text-xs font-bold text-mute uppercase tracking-wider">
+                  <th className="py-4 px-6 w-12 text-center">
+                    <input
+                      type="checkbox"
+                      className="rounded border-ink/10 text-ink focus:ring-ink"
+                      checked={
+                        filteredUsers.length > 0 &&
+                        selectedUserIds.length === filteredUsers.length
+                      }
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                    />
+                  </th>
                   <th className="py-4 px-6">User</th>
                   <th className="py-4 px-6">Family Info</th>
                   <th className="py-4 px-6">Request Date</th>
@@ -303,8 +553,16 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/[0.05]">
-                {filteredUsers.map((user) => (
+                {paginatedUsers.map((user) => (
                   <tr key={user.id} className="hover:bg-canvas-soft/30 transition-colors text-sm text-ink">
+                    <td className="py-4 px-6 text-center">
+                      <input
+                        type="checkbox"
+                        className="rounded border-ink/10 text-ink focus:ring-ink"
+                        checked={selectedUserIds.includes(user.id)}
+                        onChange={() => handleToggleSelect(user.id)}
+                      />
+                    </td>
                     {/* User */}
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-3">
@@ -348,62 +606,101 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
 
                     {/* Actions */}
                     <td className="py-4 px-6 text-right">
-                      {user.status === "pending" && (
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleApprove(user.id)}
-                            disabled={isPending && actionUserId === user.id}
-                            className="bg-primary hover:bg-primary-hover active:bg-primary-active text-ink font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
-                          >
-                            <UserCheck size={14} />
-                            {isPending && actionUserId === user.id ? "Approving…" : "Approve"}
-                          </button>
-                          <button
-                            onClick={() => handleReject(user.id)}
-                            disabled={isPending && actionUserId === user.id}
-                            className="bg-canvas border border-ink/20 hover:bg-canvas-soft text-negative-darkest font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
-                          >
-                            <UserX size={14} />
-                            {isPending && actionUserId === user.id ? "…" : "Reject"}
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => handleViewTimeline(user)}
+                          title="View User Audit Trail"
+                          className="p-2 bg-canvas border border-ink/10 hover:bg-canvas-soft text-body rounded-lg transition-all"
+                        >
+                          <History size={14} />
+                        </button>
 
-                      {(user.status === "approved" || user.status === "suspended") && (
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => promptResendConfirm(user.id)}
-                            disabled={isPending && actionUserId === user.id}
-                            title="Regenerate & Resend Master Password"
-                            className="bg-canvas border border-ink/10 hover:bg-canvas-soft text-ink font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
-                          >
-                            <RefreshCw size={13} className={isPending && actionUserId === user.id ? "animate-spin" : ""} />
-                            {isPending && actionUserId === user.id ? "Sending…" : "Resend Credentials"}
-                          </button>
-                          <button
-                            onClick={() => handleToggleSuspension(user.id)}
-                            disabled={isPending && actionUserId === user.id}
-                            className={`font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all disabled:opacity-50 ${
-                              user.status === "suspended"
-                                ? "bg-primary hover:bg-primary-hover text-ink"
-                                : "bg-canvas border border-negative/20 text-negative-darkest hover:bg-negative-bg hover:text-white"
-                            }`}
-                          >
-                            {user.status === "suspended" ? "Activate" : "Suspend"}
-                          </button>
-                        </div>
-                      )}
+                        {user.status === "pending" && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleApprove(user.id)}
+                              disabled={isPending && actionUserId === user.id}
+                              className="bg-primary hover:bg-primary-hover active:bg-primary-active text-ink font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+                            >
+                              <UserCheck size={14} />
+                              {isPending && actionUserId === user.id ? "Approving…" : "Approve"}
+                            </button>
+                            <button
+                              onClick={() => handleReject(user.id)}
+                              disabled={isPending && actionUserId === user.id}
+                              className="bg-canvas border border-ink/20 hover:bg-canvas-soft text-negative-darkest font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
+                            >
+                              <UserX size={14} />
+                              {isPending && actionUserId === user.id ? "…" : "Reject"}
+                            </button>
+                          </div>
+                        )}
 
-                      {user.status === "rejected" && (
-                        <span className="text-xs text-negative-darkest font-semibold">
-                          Request Rejected
-                        </span>
-                      )}
+                        {(user.status === "approved" || user.status === "suspended") && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => promptResendConfirm(user.id)}
+                              disabled={isPending && actionUserId === user.id}
+                              title="Regenerate & Resend Master Password"
+                              className="bg-canvas border border-ink/10 hover:bg-canvas-soft text-ink font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all disabled:opacity-50"
+                            >
+                              <RefreshCw size={13} className={isPending && actionUserId === user.id ? "animate-spin" : ""} />
+                              {isPending && actionUserId === user.id ? "Sending…" : "Resend Credentials"}
+                            </button>
+                            <button
+                              onClick={() => handleToggleSuspension(user.id)}
+                              disabled={isPending && actionUserId === user.id}
+                              className={`font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all disabled:opacity-50 ${
+                                user.status === "suspended"
+                                  ? "bg-primary hover:bg-primary-hover text-ink"
+                                  : "bg-canvas border border-negative/20 text-negative-darkest hover:bg-negative-bg hover:text-white"
+                              }`}
+                            >
+                              {user.status === "suspended" ? "Activate" : "Suspend"}
+                            </button>
+                          </div>
+                        )}
+
+                        {user.status === "rejected" && (
+                          <span className="text-xs text-negative-darkest font-semibold">
+                            Request Rejected
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Footer */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 bg-canvas-soft border-t border-black/[0.05] text-sm text-mute font-medium">
+            <div>
+              Showing <span className="text-ink font-bold">{((currentPage - 1) * 10) + 1}</span> to{" "}
+              <span className="text-ink font-bold">
+                {Math.min(currentPage * 10, totalCount)}
+              </span>{" "}
+              of <span className="text-ink font-bold">{totalCount}</span> requests
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => updateQuery("page", String(Math.max(1, currentPage - 1)))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 bg-canvas border border-ink/10 rounded-lg hover:bg-canvas-soft disabled:opacity-50 disabled:hover:bg-canvas transition-all"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => updateQuery("page", String(Math.min(totalPages, currentPage + 1)))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 bg-canvas border border-ink/10 rounded-lg hover:bg-canvas-soft disabled:opacity-50 disabled:hover:bg-canvas transition-all"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -546,6 +843,125 @@ export function UsersTable({ initialUsers, isSmtpConfigured = true }: UsersTable
                 setCopied(false);
               }}
               className="w-full bg-ink text-canvas-soft font-bold py-3 px-6 rounded-xl transition-all hover:bg-black/90 active:scale-[0.99]"
+            >
+              Done & Close
+            </button>
+          </div>
+        </div>
+      )}
+      {/* ── User Activity Timeline Modal ──────────────────────────────────────── */}
+      {activeTimelineUser && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <div className="bg-canvas w-full max-w-lg rounded-xl border border-black/[0.08] p-8 shadow-xl space-y-6 max-h-[85vh] flex flex-col">
+            <div className="flex justify-between items-center shrink-0">
+              <h3 className="text-xl font-black text-ink">User Activity Timeline</h3>
+              <button
+                onClick={() => setActiveTimelineUser(null)}
+                className="text-mute hover:text-ink text-sm font-bold"
+              >
+                Close
+              </button>
+            </div>
+            
+            <div className="bg-canvas-soft p-4 rounded-xl shrink-0">
+              <p className="text-xs text-mute font-bold uppercase tracking-wider">User details</p>
+              <p className="text-sm font-bold text-ink mt-0.5">{activeTimelineUser.name}</p>
+              <p className="text-xs text-body font-medium">{activeTimelineUser.email}</p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4 min-h-[200px]">
+              {timelineLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-2 text-mute">
+                  <RefreshCw size={24} className="animate-spin" />
+                  <p className="text-xs font-semibold">Fetching timeline logs...</p>
+                </div>
+              ) : timelineLogs.length === 0 ? (
+                <div className="text-center py-12 text-mute space-y-1">
+                  <Activity size={32} className="mx-auto opacity-50" />
+                  <p className="text-sm font-bold">No activity logs found</p>
+                  <p className="text-xs">No administrative actions have been logged for this user yet.</p>
+                </div>
+              ) : (
+                <div className="relative border-l-2 border-ink/10 ml-3 pl-5 space-y-6 py-2">
+                  {timelineLogs.map((log) => (
+                    <div key={log.id} className="relative">
+                      <div className="absolute -left-[27px] top-1.5 w-3 h-3 rounded-full bg-ink border-2 border-canvas" />
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-mute">
+                            {log.createdAt ? new Date(log.createdAt).toLocaleString('en-IN') : 'Unknown Date'}
+                          </span>
+                          <span className="text-[9px] font-black uppercase tracking-wider bg-canvas-soft border border-ink/10 px-2 py-0.5 rounded-full">
+                            {log.action}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-body leading-relaxed">{log.note}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={() => setActiveTimelineUser(null)}
+              className="w-full bg-ink text-canvas-soft font-bold py-3 px-6 rounded-xl transition-all hover:bg-black/90 shrink-0"
+            >
+              Done & Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk Approvals Credentials Reveal Modal ────────────────────────────── */}
+      {bulkApproveRevealModal.isOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+          <div className="bg-canvas w-full max-w-xl rounded-xl border border-black/[0.08] p-8 shadow-xl space-y-6 max-h-[85vh] flex flex-col">
+            <div className="text-center space-y-1 shrink-0">
+              <div className="inline-flex w-12 h-12 rounded-full bg-primary-pale flex items-center justify-center mb-1">
+                <CheckCircle size={28} className="text-positive" />
+              </div>
+              <h3 className="text-xl font-black text-ink">Bulk Approvals Completed</h3>
+              <p className="text-xs text-body">
+                Please copy the generated passwords for users below. Note that these are shown <strong>only once</strong>.
+              </p>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-1 space-y-4 border border-black/[0.05] rounded-xl p-4 bg-canvas-soft">
+              {bulkApproveRevealModal.results.map((res) => (
+                <div key={res.userId} className="border-b border-black/[0.05] last:border-b-0 pb-3 last:pb-0 space-y-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="text-sm font-bold text-ink">{res.email}</p>
+                      {res.warning && <p className="text-[10px] text-negative-darkest leading-normal mt-0.5">{res.warning}</p>}
+                    </div>
+                    {res.masterPassword && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(res.masterPassword!);
+                          alert(`Copied password for ${res.email}`);
+                        }}
+                        className="text-[11px] font-bold text-ink underline flex items-center gap-1 hover:text-black/80"
+                      >
+                        <Copy size={11} />
+                        Copy
+                      </button>
+                    )}
+                  </div>
+                  {res.masterPassword && (
+                    <div className="bg-canvas border border-ink/10 px-3 py-2 rounded-lg text-center">
+                      <span className="font-mono text-sm font-black tracking-widest text-ink select-all">
+                        {res.masterPassword}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setBulkApproveRevealModal({ isOpen: false, results: [] })}
+              className="w-full bg-ink text-canvas-soft font-bold py-3 px-6 rounded-xl transition-all hover:bg-black/90 shrink-0"
             >
               Done & Close
             </button>

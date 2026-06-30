@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,24 +9,30 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { formatINR } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { Property, FamilyMember, Loan } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const TYPES = ['House', 'Agricultural Land', 'Plot', 'Commercial', 'Other'];
 
 export default function PropertyScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [properties, setProperties] = useState<Property[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -42,6 +48,19 @@ export default function PropertyScreen() {
   const [linkedLoanLocalId, setLinkedLoanLocalId] = useState('');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('property', {
+    name: setName,
+    type: setType,
+    ownerMemberId: setOwnerMemberId,
+    location: setLocation,
+    area: setArea,
+    purchaseDate: setPurchaseDate,
+    purchasePrice: setPurchasePrice,
+    currentValue: setCurrentValue,
+    linkedLoanLocalId: setLinkedLoanLocalId,
+    notes: setNotes,
+  }, !editingId);
+
   // Total valuation
   const [totalValue, setTotalValue] = useState(0);
 
@@ -49,9 +68,24 @@ export default function PropertyScreen() {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && properties.length > 0) {
+      const item = properties.find(p => p.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, properties]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allProps = await getAllRecords<Property>('property', cryptoKey);
       setProperties(allProps);
@@ -62,7 +96,10 @@ export default function PropertyScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setOwnerMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['property'];
+        if (!draft || !draft.ownerMemberId) {
+          setOwnerMemberId(allMembers[0].localId);
+        }
       }
 
       const allLoans = await getAllRecords<Loan>('loans', cryptoKey);
@@ -70,7 +107,7 @@ export default function PropertyScreen() {
     } catch (err) {
       Alert.alert('Error', 'Failed to load property register');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -134,6 +171,7 @@ export default function PropertyScreen() {
         await updateRecord('property', editingId, payload, cryptoKey);
       } else {
         await insertRecord('property', payload, cryptoKey);
+        useFormDraftStore.getState().clearDraft('property');
       }
 
       setModalVisible(false);
@@ -198,7 +236,11 @@ export default function PropertyScreen() {
       </View>
 
       {loading && properties.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : properties.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="home-outline" size={64} color="#868685" />
@@ -210,6 +252,14 @@ export default function PropertyScreen() {
           data={properties}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => (
             <TouchableOpacity 
               style={styles.card}
@@ -264,7 +314,7 @@ export default function PropertyScreen() {
                 placeholder="e.g. Village House"
                 placeholderTextColor="#868685"
                 value={name}
-                onChangeText={setName}
+                onChangeText={(val) => { setName(val); updateDraftField('name', val); }}
               />
 
               <Text style={styles.label}>Property Type</Text>
@@ -276,7 +326,7 @@ export default function PropertyScreen() {
                       styles.pickerChip,
                       type === t && styles.pickerChipActive
                     ]}
-                    onPress={() => setType(t as any)}
+                    onPress={() => { setType(t as any); updateDraftField('type', t); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -297,7 +347,7 @@ export default function PropertyScreen() {
                       styles.pickerChip,
                       ownerMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setOwnerMemberId(m.localId)}
+                    onPress={() => { setOwnerMemberId(m.localId); updateDraftField('ownerMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -315,7 +365,7 @@ export default function PropertyScreen() {
                 placeholder="Location details"
                 placeholderTextColor="#868685"
                 value={location}
-                onChangeText={setLocation}
+                onChangeText={(val) => { setLocation(val); updateDraftField('location', val); }}
               />
 
               <Text style={styles.label}>Area / Size</Text>
@@ -324,7 +374,7 @@ export default function PropertyScreen() {
                 placeholder="e.g. 1500 sq ft or 2 Bigha"
                 placeholderTextColor="#868685"
                 value={area}
-                onChangeText={setArea}
+                onChangeText={(val) => { setArea(val); updateDraftField('area', val); }}
               />
 
               <Text style={styles.label}>Purchase Price (INR)</Text>
@@ -334,7 +384,7 @@ export default function PropertyScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={purchasePrice}
-                onChangeText={setPurchasePrice}
+                onChangeText={(val) => { setPurchasePrice(val); updateDraftField('purchasePrice', val); }}
               />
 
               <Text style={styles.label}>Estimated Current Value (INR)</Text>
@@ -344,7 +394,7 @@ export default function PropertyScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={currentValue}
-                onChangeText={setCurrentValue}
+                onChangeText={(val) => { setCurrentValue(val); updateDraftField('currentValue', val); }}
               />
 
               <Text style={styles.label}>Linked Home Loan (Optional)</Text>
@@ -354,7 +404,7 @@ export default function PropertyScreen() {
                     styles.pickerChip,
                     !linkedLoanLocalId && styles.pickerChipActive
                   ]}
-                  onPress={() => setLinkedLoanLocalId('')}
+                  onPress={() => { setLinkedLoanLocalId(''); updateDraftField('linkedLoanLocalId', ''); }}
                 >
                   <Text style={[
                     styles.pickerChipText,
@@ -370,7 +420,7 @@ export default function PropertyScreen() {
                       styles.pickerChip,
                       linkedLoanLocalId === l.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setLinkedLoanLocalId(l.localId)}
+                    onPress={() => { setLinkedLoanLocalId(l.localId); updateDraftField('linkedLoanLocalId', l.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -389,7 +439,7 @@ export default function PropertyScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

@@ -2,8 +2,11 @@
 
 import { signIn } from "@/lib/auth";
 import { AuthError } from "next-auth";
+import { createLogger } from "@/lib/logger";
 
-export async function loginAdmin(prevState: any, formData: FormData) {
+const log = createLogger("auth");
+
+export async function loginAdmin(prevState: unknown, formData: FormData) {
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
 
@@ -18,9 +21,12 @@ export async function loginAdmin(prevState: any, formData: FormData) {
       redirectTo: "/dashboard",
     });
     return { success: true };
-  } catch (error: any) {
+  } catch (error: unknown) {
     // NextAuth redirect triggers a special redirect error that must be thrown to propagate
-    if (error?.message === "NEXT_REDIRECT" || error?.digest?.startsWith("NEXT_REDIRECT")) {
+    if (
+      error instanceof Error &&
+      (error.message === "NEXT_REDIRECT" || (error as { digest?: string }).digest?.startsWith("NEXT_REDIRECT"))
+    ) {
       throw error;
     }
     
@@ -28,7 +34,9 @@ export async function loginAdmin(prevState: any, formData: FormData) {
       return { error: "Invalid email or password." };
     }
     
-    console.error("Login action error:", error);
+    log.error("Login action failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return { error: "Invalid email or password." }; // Keep error generic
   }
 }

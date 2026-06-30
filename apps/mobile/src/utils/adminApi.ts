@@ -30,10 +30,19 @@ async function apiFetch(path: string, body: Record<string, unknown>, useAuth = f
     body: JSON.stringify(body),
   });
 
-  const json = await res.json().catch(() => ({ error: 'Invalid server response.' }));
+  const json = await res.json().catch(() => ({ error: { code: 'PARSE_ERROR', message: 'Invalid server response.' } }));
 
   if (!res.ok) {
-    throw new Error(json.error ?? `Server error ${res.status}`);
+    // Handle standardized error format: { success: false, error: { code, message } }
+    // Fallback to flat error format: { error: "message" }
+    const errorMessage = json.error?.message ?? json.error ?? `Server error ${res.status}`;
+    throw new Error(errorMessage);
+  }
+
+  // Handle standardized success format: { success: true, data: {...} }
+  // Also support flat format: { success: true, ... }
+  if (json.success && json.data !== undefined) {
+    return json.data;
   }
 
   return json;
@@ -49,11 +58,11 @@ export async function fetchEncryptedDbUrl(
   email: string,
   masterPassword: string
 ): Promise<{ name: string; encryptedDbUrl: string | null }> {
-  const data = await apiFetch('/api/mobile/login', { email, masterPassword }, false);
-  if (data.token) {
-    await SecureStore.setItemAsync('kk_session_token', data.token);
+  const result = await apiFetch('/api/mobile/login', { email, masterPassword }, false);
+  if (result.token) {
+    await SecureStore.setItemAsync('kk_session_token', result.token);
   }
-  return { name: data.name, encryptedDbUrl: data.encryptedDbUrl ?? null };
+  return { name: result.name, encryptedDbUrl: result.encryptedDbUrl ?? null };
 }
 
 // ─── Upload DB URL ───────────────────────────────────────────────────────────

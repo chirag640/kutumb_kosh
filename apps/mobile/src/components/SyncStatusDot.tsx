@@ -25,8 +25,8 @@ export function SyncStatusDot() {
         if (row) totalPending += row.count;
       });
       setPendingCount(totalPending);
-    } catch (e) {
-      console.log('Error counting sync pending', e);
+    } catch {
+      // Silently handle — count will be 0
     }
   }, [isSyncing, lastSynced]);
 
@@ -35,8 +35,8 @@ export function SyncStatusDot() {
     useSyncStore.getState().setSyncing(true);
     try {
       await performSync('manual');
-    } catch (err) {
-      console.log('Badge sync trigger error:', err);
+    } catch {
+      // Silently handle — sync is best-effort from badge
     }
   };
 
@@ -84,6 +84,9 @@ export function SyncStatusDot() {
       onPress={isActionable ? handleSyncPress : () => router.push('/settings/sync')}
       style={[styles.badge, { borderColor: badgeColor, backgroundColor: badgeBg }]}
       activeOpacity={0.8}
+      accessibilityLabel={`Sync Status: ${badgeText}`}
+      accessibilityRole="button"
+      accessibilityHint={isActionable ? "Tap to synchronize records with the server" : "Tap to open sync settings"}
     >
       {isSyncing ? (
         <ActivityIndicator size="small" color="#0e0f0c" style={{ marginRight: 4 }} />

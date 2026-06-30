@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,25 +9,31 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { DaysChip } from '../../../src/components/DaysChip';
 import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { LICPolicy, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const FREQUENCIES = ['Monthly', 'Quarterly', 'Half-Yearly', 'Yearly'];
 const STATUSES = ['Active', 'Paid-Up', 'Lapsed', 'Matured'];
 
 export default function LICScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [policies, setPolicies] = useState<LICPolicy[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
   // Form states
@@ -45,13 +51,41 @@ export default function LICScreen() {
   // Edit mode
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  const { updateDraftField } = useFormDraft('lic', {
+    policyHolderMemberId: setPolicyHolderMemberId,
+    policyNumber: setPolicyNumber,
+    planName: setPlanName,
+    sumAssured: setSumAssured,
+    premiumAmount: setPremiumAmount,
+    frequency: setFrequency,
+    nextDueDate: setNextDueDate,
+    maturityDate: setMaturityDate,
+    status: setStatus,
+    notes: setNotes,
+  }, !editingId);
+
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && policies.length > 0) {
+      const item = policies.find(p => p.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, policies]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allPolicies = await getAllRecords<LICPolicy>('lic_policies', cryptoKey);
       // Sort by next due date ascending
@@ -61,12 +95,15 @@ export default function LICScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setPolicyHolderMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['lic'];
+        if (!draft || !draft.policyHolderMemberId) {
+          setPolicyHolderMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to load LIC policies');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -132,6 +169,7 @@ export default function LICScreen() {
         await updateRecord('lic_policies', editingId, payload, cryptoKey, indexFields);
       } else {
         await insertRecord('lic_policies', payload, cryptoKey, indexFields);
+        useFormDraftStore.getState().clearDraft('lic');
       }
       setModalVisible(false);
       resetForm();
@@ -190,7 +228,11 @@ export default function LICScreen() {
       </View>
 
       {loading && policies.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : policies.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="heart-outline" size={64} color="#868685" />
@@ -202,6 +244,14 @@ export default function LICScreen() {
           data={policies}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const urgencyColor = getUrgencyColor(item.nextDueDate);
             const daysLeft = calcDaysRemaining(item.nextDueDate);
@@ -262,7 +312,7 @@ export default function LICScreen() {
                 placeholder="e.g. Jeevan Anand"
                 placeholderTextColor="#868685"
                 value={planName}
-                onChangeText={setPlanName}
+                onChangeText={(val) => { setPlanName(val); updateDraftField('planName', val); }}
               />
 
               <Text style={styles.label}>Policy Holder</Text>
@@ -274,7 +324,7 @@ export default function LICScreen() {
                       styles.pickerChip,
                       policyHolderMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setPolicyHolderMemberId(m.localId)}
+                    onPress={() => { setPolicyHolderMemberId(m.localId); updateDraftField('policyHolderMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -293,7 +343,7 @@ export default function LICScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={policyNumber}
-                onChangeText={setPolicyNumber}
+                onChangeText={(val) => { setPolicyNumber(val); updateDraftField('policyNumber', val); }}
               />
 
               <Text style={styles.label}>Sum Assured (INR)</Text>
@@ -303,7 +353,7 @@ export default function LICScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={sumAssured}
-                onChangeText={setSumAssured}
+                onChangeText={(val) => { setSumAssured(val); updateDraftField('sumAssured', val); }}
               />
 
               <Text style={styles.label}>Premium Amount (INR)</Text>
@@ -313,7 +363,7 @@ export default function LICScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={premiumAmount}
-                onChangeText={setPremiumAmount}
+                onChangeText={(val) => { setPremiumAmount(val); updateDraftField('premiumAmount', val); }}
               />
 
               <Text style={styles.label}>Premium Frequency</Text>
@@ -325,7 +375,7 @@ export default function LICScreen() {
                       styles.pickerChip,
                       frequency === freq && styles.pickerChipActive
                     ]}
-                    onPress={() => setFrequency(freq as any)}
+                    onPress={() => { setFrequency(freq as any); updateDraftField('frequency', freq); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -343,7 +393,7 @@ export default function LICScreen() {
                 placeholder="2026-06-20"
                 placeholderTextColor="#868685"
                 value={nextDueDate}
-                onChangeText={setNextDueDate}
+                onChangeText={(val) => { setNextDueDate(val); updateDraftField('nextDueDate', val); }}
               />
 
               <Text style={styles.label}>Maturity Date (YYYY-MM-DD)</Text>
@@ -352,7 +402,7 @@ export default function LICScreen() {
                 placeholder="2040-06-20"
                 placeholderTextColor="#868685"
                 value={maturityDate}
-                onChangeText={setMaturityDate}
+                onChangeText={(val) => { setMaturityDate(val); updateDraftField('maturityDate', val); }}
               />
 
               <Text style={styles.label}>Status</Text>
@@ -364,7 +414,7 @@ export default function LICScreen() {
                       styles.pickerChip,
                       status === st && styles.pickerChipActive
                     ]}
-                    onPress={() => setStatus(st as any)}
+                    onPress={() => { setStatus(st as any); updateDraftField('status', st); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -383,7 +433,7 @@ export default function LICScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

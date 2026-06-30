@@ -1,6 +1,8 @@
 import crypto from 'crypto';
+import { getEnv } from '@/lib/env';
 
-const JWT_SECRET = process.env.NEXTAUTH_SECRET || 'default-fallback-secret-for-jwt-tokens-32-chars';
+const env = getEnv();
+const JWT_SECRET = env.NEXTAUTH_SECRET;
 
 export interface TokenPayload {
   userId: string;

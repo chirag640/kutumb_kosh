@@ -37,9 +37,9 @@ export default function Home() {
       } else {
         setStatus("success");
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error(err);
-      setErrorMessage(err.message || "Failed to submit registration request. Please try again.");
+      setErrorMessage(err instanceof Error ? err.message : "Failed to submit registration request. Please try again.");
       setStatus("error");
     }
   };
@@ -74,10 +74,10 @@ export default function Home() {
               Offline-First &amp; Encrypted
             </span>
             <h1 className="text-5xl lg:text-7xl font-black tracking-tight leading-[1.05] text-ink">
-              Your family's private financial fortress.
+              Your family&apos;s private financial fortress.
             </h1>
             <p className="text-lg lg:text-xl text-body max-w-xl font-normal leading-relaxed">
-              KutumbKosh stores and end-to-end encrypts your family's assets, insurance policies, loans, and documents on your own device. Back up to your private database securely.
+              KutumbKosh stores and end-to-end encrypts your family&apos;s assets, insurance policies, loans, and documents on your own device. Back up to your private database securely.
             </p>
           </div>
 

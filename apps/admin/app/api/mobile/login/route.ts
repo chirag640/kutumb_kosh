@@ -1,14 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
 import { adminUsers } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { signToken } from '@/lib/jwt';
 import { rateLimit } from '@/lib/rateLimit';
 import bcrypt from 'bcryptjs';
+import { apiSuccess, apiError, apiRateLimited, apiServerError, apiValidationError } from '@/lib/api-response';
+import { loginRequestSchema } from '@kutumbkosh/shared/validators';
  
 /**
  * POST /api/mobile/login
- * Body: { email: string; masterPassword?: string }
+ * Body: { email: string; masterPassword: string }
  *
  * Verifies the master password against the server-stored bcrypt hash,
  * issues a JWT session token for future admin API authentications, and
@@ -19,23 +21,17 @@ export async function POST(req: NextRequest) {
     const ip = req.headers.get('x-forwarded-for') || 'unknown';
     
     // Apply IP-based rate limiting (5 requests per 15 minutes)
-    const limitRes = rateLimit(`login-ip-${ip}`, 5, 15 * 60 * 1000);
+    const limitRes = await rateLimit(`login-ip-${ip}`, 5, 15 * 60 * 1000);
     if (!limitRes.success) {
-      return NextResponse.json(
-        { error: 'Too many login attempts. Please try again in 15 minutes.' },
-        { status: 429 }
-      );
+      return apiRateLimited('Too many login attempts. Please try again in 15 minutes.');
     }
  
-    const { email, masterPassword } = await req.json();
- 
-    if (!email || typeof email !== 'string') {
-      return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
+    const body = await req.json();
+    const parsed = loginRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return apiValidationError(parsed.error.issues.map(i => i.message).join('; '));
     }
- 
-    if (!masterPassword || typeof masterPassword !== 'string') {
-      return NextResponse.json({ error: 'Master password is required.' }, { status: 400 });
-    }
+    const { email, masterPassword } = parsed.data;
  
     const [user] = await db
       .select({
@@ -51,34 +47,25 @@ export async function POST(req: NextRequest) {
  
     if (!user) {
       // Generic error to prevent email harvesting
-      return NextResponse.json({ error: 'Invalid email or master password.' }, { status: 401 });
+      return apiError('AUTH_FAILED', 'Invalid email or master password.', 401);
     }
  
     if (user.status === 'suspended') {
-      return NextResponse.json(
-        { error: 'Your account has been suspended by the administrator.' },
-        { status: 403 }
-      );
+      return apiError('ACCOUNT_SUSPENDED', 'Your account has been suspended by the administrator.', 403);
     }
  
     if (user.status !== 'approved') {
-      return NextResponse.json(
-        { error: 'Your account is not approved. Please contact the administrator.' },
-        { status: 403 }
-      );
+      return apiError('ACCOUNT_NOT_APPROVED', 'Your account is not approved. Please contact the administrator.', 403);
     }
  
     // Verify master password hash
     if (!user.masterPasswordHash) {
-      return NextResponse.json(
-        { error: 'Credentials not initialized. Please request admin to resend credentials.' },
-        { status: 400 }
-      );
+      return apiError('CREDENTIALS_NOT_INITIALIZED', 'Credentials not initialized. Please request admin to resend credentials.', 400);
     }
  
     const isPasswordValid = await bcrypt.compare(masterPassword.trim(), user.masterPasswordHash);
     if (!isPasswordValid) {
-      return NextResponse.json({ error: 'Invalid email or master password.' }, { status: 401 });
+      return apiError('AUTH_FAILED', 'Invalid email or master password.', 401);
     }
 
     // Update lastSeen
@@ -90,15 +77,12 @@ export async function POST(req: NextRequest) {
     // Sign JWT session token for subsequent sync/upload calls
     const token = signToken({ userId: user.id, email: user.email });
 
-    return NextResponse.json({
-      success: true,
+    return apiSuccess({
       name: user.name,
-      // null if user hasn't uploaded their DB URL yet (first-time setup)
       encryptedDbUrl: user.encryptedDbUrl ?? null,
       token,
     });
-  } catch (err: any) {
-    console.error('[/api/mobile/login]', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+  } catch (err: unknown) {
+    return apiServerError(err);
   }
 }

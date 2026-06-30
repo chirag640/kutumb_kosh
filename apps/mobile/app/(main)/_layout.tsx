@@ -12,19 +12,26 @@ export default function MainLayout() {
         tabBarStyle: {
           backgroundColor: '#0e0f0c', // near black
           borderTopWidth: 0,
-          height: 60,
-          paddingBottom: 0,
+          height: 64,
           margin: 16,
           borderRadius: 24, // rounded.xl
           position: 'absolute',
           left: 0,
           right: 0,
-          bottom: 0,
+          bottom: 8, // Raised to clear Android/iOS navigation bar
           shadowColor: '#000',
           shadowOffset: { width: 0, height: 10 },
           shadowOpacity: 0.1,
           shadowRadius: 10,
           elevation: 5,
+        },
+        tabBarItemStyle: {
+          height: 64,
+          justifyContent: 'center',
+          alignItems: 'center',
+        },
+        tabBarIconStyle: {
+          alignSelf: 'center',
         },
         tabBarActiveTintColor: '#9fe870', // Primary Green
         tabBarInactiveTintColor: '#868685', // Mute Gray

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { auth, signOut } from "@/lib/auth";
 import { Users, LayoutDashboard, LogOut, ShieldAlert, ArrowLeftRight } from "lucide-react";
+import { IdleTimeout } from "@/components/IdleTimeout";
 
 export default async function AdminLayout({
   children,
@@ -15,10 +16,16 @@ export default async function AdminLayout({
     redirect("/login");
   }
 
+  // Enforce Authorization: role must be 'admin'
+  if ((session.user as { role?: string })?.role !== 'admin') {
+    redirect("/login?error=Unauthorized");
+  }
+
   const adminEmail = session.user?.email || "Admin";
 
   return (
     <div className="min-h-screen bg-canvas-soft text-ink font-sans flex flex-col md:flex-row">
+      <IdleTimeout />
       {/* Sidebar Navigation */}
       <aside className="w-full md:w-64 bg-ink text-canvas-soft flex flex-col justify-between p-6 shrink-0 md:sticky md:top-0 md:h-screen">
         <div className="space-y-8">

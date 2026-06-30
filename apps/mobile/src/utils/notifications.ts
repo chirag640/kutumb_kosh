@@ -4,11 +4,12 @@ import type {
   NotificationHandler,
   NotificationRequestInput,
   Notification,
+  NotificationRequest,
   NotificationPermissionsStatus,
 } from 'expo-notifications';
 
 // Lazily loaded Notifications module to prevent side-effect crash in Expo Go on Android
-let NotificationsModule: any = null;
+let NotificationsModule: typeof import('expo-notifications') | null = null;
 
 const isAndroidExpoGo = Platform.OS === 'android' && isRunningInExpoGo();
 
@@ -20,15 +21,15 @@ if (!isAndroidExpoGo) {
   }
 }
 
-export const SchedulableTriggerInputTypes = NotificationsModule?.SchedulableTriggerInputTypes || {
-  DATE: 'date',
-  TIME_INTERVAL: 'timeInterval',
-  DAILY: 'daily',
-  WEEKLY: 'weekly',
-  MONTHLY: 'monthly',
-  YEARLY: 'yearly',
-  CALENDAR: 'calendar',
-};
+export const SchedulableTriggerInputTypes = (NotificationsModule?.SchedulableTriggerInputTypes || {
+  DATE: 'date' as const,
+  TIME_INTERVAL: 'timeInterval' as const,
+  DAILY: 'daily' as const,
+  WEEKLY: 'weekly' as const,
+  MONTHLY: 'monthly' as const,
+  YEARLY: 'yearly' as const,
+  CALENDAR: 'calendar' as const,
+}) as typeof import('expo-notifications').SchedulableTriggerInputTypes;
 
 export async function getPermissionsAsync(): Promise<NotificationPermissionsStatus> {
   if (isAndroidExpoGo || !NotificationsModule) {
@@ -72,7 +73,7 @@ export async function scheduleNotificationAsync(request: NotificationRequestInpu
   return NotificationsModule.scheduleNotificationAsync(request);
 }
 
-export async function getAllScheduledNotificationsAsync(): Promise<any[]> {
+export async function getAllScheduledNotificationsAsync(): Promise<NotificationRequest[]> {
   if (isAndroidExpoGo || !NotificationsModule) {
     console.warn('getAllScheduledNotificationsAsync: Notifications are disabled in Android Expo Go');
     return [];

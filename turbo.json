@@ -8,6 +8,12 @@
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "test": {
+      "cache": false
+    },
+    "lint": {
+      "cache": false
     }
   }
 }

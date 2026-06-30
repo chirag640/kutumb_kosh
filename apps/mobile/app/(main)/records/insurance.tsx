@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   StyleSheet, 
   View, 
@@ -9,25 +9,31 @@ import {
   TextInput, 
   Alert, 
   ActivityIndicator,
-  ScrollView 
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { insertRecord, getAllRecords, deleteRecord, updateRecord } from '../../../src/db/crud';
 import { AmountDisplay } from '../../../src/components/AmountDisplay';
 import { DaysChip } from '../../../src/components/DaysChip';
 import { calcDaysRemaining, formatINR, isValidDate } from '../../../src/utils/calculations';
+import { SkeletonCard } from '../../../src/components/Skeleton';
 import type { InsurancePolicy, FamilyMember } from '@kutumbkosh/shared';
+import { useFormDraft } from '../../../src/hooks/useFormDraft';
+import { useFormDraftStore } from '../../../src/store/formDraftStore';
 
 const TYPES = ['Health', 'Term Life', 'Vehicle', 'Home', 'Crop/Farming', 'Personal Accident', 'Travel'];
 const STATUSES = ['Active', 'Expired', 'Cancelled'];
 
 export default function InsuranceScreen() {
   const { cryptoKey } = useAuthStore();
+  const params = useLocalSearchParams<{ editId?: string }>();
   const [policies, setPolicies] = useState<InsurancePolicy[]>([]);
   const [members, setMembers] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -42,13 +48,40 @@ export default function InsuranceScreen() {
   const [status, setStatus] = useState<InsurancePolicy['status']>('Active');
   const [notes, setNotes] = useState('');
 
+  const { updateDraftField } = useFormDraft('insurance', {
+    policyHolderMemberId: setPolicyHolderMemberId,
+    insuranceType: setInsuranceType,
+    company: setCompany,
+    policyNumber: setPolicyNumber,
+    coverageAmount: setCoverageAmount,
+    premium: setPremium,
+    renewalDate: setRenewalDate,
+    status: setStatus,
+    notes: setNotes,
+  }, !editingId);
+
   useEffect(() => {
     loadData();
   }, []);
 
-  const loadData = async () => {
+  useEffect(() => {
+    if (params.editId && policies.length > 0) {
+      const item = policies.find(p => p.localId === params.editId);
+      if (item) {
+        handleOpenEdit(item);
+      }
+    }
+  }, [params.editId, policies]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData(true);
+    setRefreshing(false);
+  }, [cryptoKey]);
+
+  const loadData = async (isRefreshing = false) => {
     if (!cryptoKey) return;
-    setLoading(true);
+    if (!isRefreshing) setLoading(true);
     try {
       const allPolicies = await getAllRecords<InsurancePolicy>('insurance_policies', cryptoKey);
       // Sort by renewal date ascending
@@ -58,12 +91,15 @@ export default function InsuranceScreen() {
       const allMembers = await getAllRecords<FamilyMember>('family_members', cryptoKey);
       setMembers(allMembers);
       if (allMembers.length > 0) {
-        setPolicyHolderMemberId(allMembers[0].localId);
+        const draft = useFormDraftStore.getState().drafts['insurance'];
+        if (!draft || !draft.policyHolderMemberId) {
+          setPolicyHolderMemberId(allMembers[0].localId);
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to load general insurance policies');
     } finally {
-      setLoading(false);
+      if (!isRefreshing) setLoading(false);
     }
   };
 
@@ -131,6 +167,7 @@ export default function InsuranceScreen() {
         await updateRecord('insurance_policies', editingId, payload, cryptoKey, indexFields);
       } else {
         await insertRecord('insurance_policies', payload, cryptoKey, indexFields);
+        useFormDraftStore.getState().clearDraft('insurance');
       }
 
       setModalVisible(false);
@@ -192,7 +229,11 @@ export default function InsuranceScreen() {
       <Text style={styles.hintText}>Tap to edit · Long press to delete</Text>
 
       {loading && policies.length === 0 ? (
-        <ActivityIndicator size="large" color="#0e0f0c" style={{ marginTop: 80 }} />
+        <View style={{ paddingHorizontal: 16 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </View>
       ) : policies.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="shield-checkmark-outline" size={64} color="#868685" />
@@ -204,6 +245,14 @@ export default function InsuranceScreen() {
           data={policies}
           keyExtractor={(item) => item.localId}
           contentContainerStyle={{ paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              colors={['#0e0f0c']}
+              tintColor="#0e0f0c"
+            />
+          }
           renderItem={({ item }) => {
             const urgencyColor = getUrgencyColor(item.renewalDate);
             const daysLeft = calcDaysRemaining(item.renewalDate);
@@ -265,7 +314,7 @@ export default function InsuranceScreen() {
                 placeholder="e.g. HDFC Ergo"
                 placeholderTextColor="#868685"
                 value={company}
-                onChangeText={setCompany}
+                onChangeText={(val) => { setCompany(val); updateDraftField('company', val); }}
               />
 
               <Text style={styles.label}>Policy Holder</Text>
@@ -277,7 +326,7 @@ export default function InsuranceScreen() {
                       styles.pickerChip,
                       policyHolderMemberId === m.localId && styles.pickerChipActive
                     ]}
-                    onPress={() => setPolicyHolderMemberId(m.localId)}
+                    onPress={() => { setPolicyHolderMemberId(m.localId); updateDraftField('policyHolderMemberId', m.localId); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -298,7 +347,7 @@ export default function InsuranceScreen() {
                       styles.pickerChip,
                       insuranceType === t && styles.pickerChipActive
                     ]}
-                    onPress={() => setInsuranceType(t as any)}
+                    onPress={() => { setInsuranceType(t as any); updateDraftField('insuranceType', t); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -316,7 +365,7 @@ export default function InsuranceScreen() {
                 placeholder="Policy number"
                 placeholderTextColor="#868685"
                 value={policyNumber}
-                onChangeText={setPolicyNumber}
+                onChangeText={(val) => { setPolicyNumber(val); updateDraftField('policyNumber', val); }}
               />
 
               <Text style={styles.label}>Coverage / Sum Insured (INR)</Text>
@@ -326,7 +375,7 @@ export default function InsuranceScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={coverageAmount}
-                onChangeText={setCoverageAmount}
+                onChangeText={(val) => { setCoverageAmount(val); updateDraftField('coverageAmount', val); }}
               />
 
               <Text style={styles.label}>Premium Paid (INR)</Text>
@@ -336,7 +385,7 @@ export default function InsuranceScreen() {
                 placeholderTextColor="#868685"
                 keyboardType="numeric"
                 value={premium}
-                onChangeText={setPremium}
+                onChangeText={(val) => { setPremium(val); updateDraftField('premium', val); }}
               />
 
               <Text style={styles.label}>Renewal Date (YYYY-MM-DD)</Text>
@@ -345,7 +394,7 @@ export default function InsuranceScreen() {
                 placeholder="2026-06-20"
                 placeholderTextColor="#868685"
                 value={renewalDate}
-                onChangeText={setRenewalDate}
+                onChangeText={(val) => { setRenewalDate(val); updateDraftField('renewalDate', val); }}
               />
 
               <Text style={styles.label}>Status</Text>
@@ -357,7 +406,7 @@ export default function InsuranceScreen() {
                       styles.pickerChip,
                       status === st && styles.pickerChipActive
                     ]}
-                    onPress={() => setStatus(st as any)}
+                    onPress={() => { setStatus(st as any); updateDraftField('status', st); }}
                   >
                     <Text style={[
                       styles.pickerChipText,
@@ -376,7 +425,7 @@ export default function InsuranceScreen() {
                 placeholderTextColor="#868685"
                 multiline
                 value={notes}
-                onChangeText={setNotes}
+                onChangeText={(val) => { setNotes(val); updateDraftField('notes', val); }}
               />
 
               <View style={styles.spacer} />

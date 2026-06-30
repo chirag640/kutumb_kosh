@@ -9,30 +9,50 @@
  ✓ Compiled successfully
    Linting and checking validity of types ...
    Collecting page data ...
-   Generating static pages (0/13) ...
-   Generating static pages (3/13) 
-   Generating static pages (6/13) 
-   Generating static pages (9/13) 
- ✓ Generating static pages (13/13)
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.724Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.726Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.726Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.724Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.725Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.726Z","ctx":"db","host":"remote","maxConnections":10}
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:32.728Z","ctx":"db","host":"remote","maxConnections":10}
+   Generating static pages (0/14) ...
+(node:17320) Warning: SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are treated as aliases for 'verify-full'.
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:33.073Z","ctx":"db","host":"remote","maxConnections":10}
+In the next major version (pg-connection-string v3.0.0 and pg v9.0.0), these modes will adopt standard libpq semantics, which have weaker security guarantees.
+
+To prepare for this change:
+- If you want the current behavior, explicitly use 'sslmode=verify-full'
+- If you want libpq compatibility now, use 'uselibpqcompat=true&sslmode=require'
+
+See https://www.postgresql.org/docs/current/libpq-ssl.html for libpq SSL mode definitions.
+(Use `node --trace-warnings ...` to show where the warning was created)
+   Generating static pages (3/14) 
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:33.139Z","ctx":"db","host":"remote","maxConnections":10}
+   Generating static pages (6/14) 
+   Generating static pages (10/14) 
+{"level":"info","msg":"Database pool initialized","timestamp":"2026-06-28T16:17:33.464Z","ctx":"db","host":"remote","maxConnections":10}
+ ✓ Generating static pages (14/14)
    Finalizing page optimization ...
    Collecting build traces ...
 
 Route (app)                              Size     First Load JS
-┌ ○ /                                    3.76 kB        99.7 kB
-├ ○ /_not-found                          873 B          88.1 kB
+┌ ○ /                                    3.9 kB         99.9 kB
+├ ○ /_not-found                          873 B          88.2 kB
 ├ ƒ /api/auth/[...nextauth]              0 B                0 B
+├ ○ /api/health                          0 B                0 B
 ├ ƒ /api/mobile/login                    0 B                0 B
 ├ ƒ /api/mobile/otp/request              0 B                0 B
 ├ ƒ /api/mobile/otp/verify               0 B                0 B
 ├ ƒ /api/mobile/upload-db-url            0 B                0 B
 ├ ƒ /audit-logs                          138 B          87.4 kB
-├ ƒ /dashboard                           177 B          96.1 kB
-├ ○ /login                               2.46 kB        98.4 kB
-└ ƒ /users                               5.54 kB        92.8 kB
-+ First Load JS shared by all            87.2 kB
-  ├ chunks/1dd3208c-7790d8b40420a841.js  53.6 kB
-  ├ chunks/528-640564e4be104a9b.js       31.7 kB
-  └ other shared chunks (total)          1.89 kB
+├ ƒ /dashboard                           175 B          96.2 kB
+├ ○ /login                               2.46 kB        98.5 kB
+└ ƒ /users                               7.92 kB        95.2 kB
++ First Load JS shared by all            87.3 kB
+  ├ chunks/1dd3208c-5216b6c7f6b98b3e.js  53.6 kB
+  ├ chunks/528-2a68415eaf5d1099.js       31.7 kB
+  └ other shared chunks (total)          1.95 kB
 
 
 ○  (Static)   prerendered as static content

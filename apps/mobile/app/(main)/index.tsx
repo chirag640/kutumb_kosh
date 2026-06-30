@@ -10,9 +10,11 @@ import {
   Dimensions
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import { useIsMounted } from '../../src/hooks/useIsMounted';
 import { Ionicons } from '@expo/vector-icons';
-import { Svg, Rect, Circle, Line, Path, G, Text as SvgText } from 'react-native-svg';
+import { Svg, Rect, Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 import { useAuthStore } from '../../src/store/authStore';
+import { Theme } from '../../src/constants/theme';
 import { getAllRecords } from '../../src/db/crud';
 import { AmountDisplay } from '../../src/components/AmountDisplay';
 import { SyncStatusDot } from '../../src/components/SyncStatusDot';
@@ -35,6 +37,7 @@ export default function DashboardScreen() {
   const { cryptoKey } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [activeChartSlide, setActiveChartSlide] = useState(0);
+  const isMounted = useIsMounted();
 
   // Aggregated states
   const [monthlyIncome, setMonthlyIncome] = useState(0);
@@ -184,6 +187,7 @@ export default function DashboardScreen() {
       const trend: typeof monthlyTrend = [];
       for (let i = 5; i >= 0; i--) {
         const dateOffset = new Date();
+        dateOffset.setDate(1); // Prevent day-overflow wrapping (e.g. Feb 30 -> Mar 2) when today is 29/30/31st
         dateOffset.setMonth(currentMonth - i);
         const m = dateOffset.getMonth();
         const y = dateOffset.getFullYear();
@@ -210,7 +214,9 @@ export default function DashboardScreen() {
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -236,7 +242,7 @@ export default function DashboardScreen() {
           const expHeight = (t.expense / maxVal) * height;
 
           return (
-            <G key={t.month}>
+            <React.Fragment key={`${t.month}-${idx}`}>
               {/* Income Bar (Lime Green) */}
               <Rect
                 x={x + 4}
@@ -266,7 +272,7 @@ export default function DashboardScreen() {
               >
                 {t.month}
               </SvgText>
-            </G>
+            </React.Fragment>
           );
         })}
         {/* Bottom border line */}
@@ -294,30 +300,28 @@ export default function DashboardScreen() {
     return (
       <View style={styles.donutContainer}>
         <Svg height={130} width={130}>
-          <G rotation="-90" origin="65, 65">
-            {categoryBreakdown.map((item, idx) => {
-              const pct = item.amount / total;
-              const strokeDashoffset = circumference - pct * circumference;
-              const rotation = (accumulatedAngle / total) * 360;
-              accumulatedAngle += item.amount;
+          {categoryBreakdown.map((item, idx) => {
+            const pct = item.amount / total;
+            const strokeDashoffset = circumference - pct * circumference;
+            const rotation = (accumulatedAngle / total) * 360 - 90;
+            accumulatedAngle += item.amount;
 
-              return (
-                <Circle
-                  key={item.name}
-                  cx="65"
-                  cy="65"
-                  r={radius}
-                  fill="transparent"
-                  stroke={item.color}
-                  strokeWidth={strokeWidth}
-                  strokeDasharray={`${circumference} ${circumference}`}
-                  strokeDashoffset={strokeDashoffset}
-                  rotation={rotation}
-                  origin="65, 65"
-                />
-              );
-            })}
-          </G>
+            return (
+              <Circle
+                key={item.name}
+                cx="65"
+                cy="65"
+                r={radius}
+                fill="transparent"
+                stroke={item.color}
+                strokeWidth={strokeWidth}
+                strokeDasharray={`${circumference} ${circumference}`}
+                strokeDashoffset={strokeDashoffset}
+                rotation={rotation}
+                origin="65, 65"
+              />
+            );
+          })}
         </Svg>
         <View style={styles.donutLegend}>
           {categoryBreakdown.slice(0, 4).map((item) => (
@@ -383,7 +387,7 @@ export default function DashboardScreen() {
           const y = height - ((val - minVal) / valRange) * height;
 
           return (
-            <G key={idx}>
+            <React.Fragment key={idx}>
               <Circle cx={x} cy={y} r="5" fill="#0e0f0c" stroke="#2ead4b" strokeWidth="2" />
               <SvgText
                 x={x}
@@ -395,7 +399,7 @@ export default function DashboardScreen() {
               >
                 {t.month}
               </SvgText>
-            </G>
+            </React.Fragment>
           );
         })}
       </Svg>
@@ -539,17 +543,45 @@ export default function DashboardScreen() {
           {/* Quick Actions Title */}
           <Text style={styles.sectionTitle}>Quick Entry</Text>
           <View style={styles.actionRow}>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/money/income')}>
+            <TouchableOpacity 
+              style={styles.actionCard} 
+              onPress={() => router.push('/money/income')}
+              accessibilityLabel="Add Income"
+              accessibilityRole="button"
+              accessibilityHint="Navigates to the income tracking screen"
+            >
               <Ionicons name="arrow-up-circle" size={32} color="#2ead4b" />
               <Text style={styles.actionText}>Add Income</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/money/expenses')}>
+            <TouchableOpacity 
+              style={styles.actionCard} 
+              onPress={() => router.push('/money')}
+              accessibilityLabel="Add Expense"
+              accessibilityRole="button"
+              accessibilityHint="Navigates to the expenses tracking screen"
+            >
               <Ionicons name="arrow-down-circle" size={32} color="#d03238" />
               <Text style={styles.actionText}>Add Expense</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionCard} onPress={() => router.push('/records')}>
-              <Ionicons name="folder-open" size={32} color="#0e0f0c" />
+            <TouchableOpacity 
+              style={styles.actionCard} 
+              onPress={() => router.push('/records')}
+              accessibilityLabel="All Vaults"
+              accessibilityRole="button"
+              accessibilityHint="Navigates to the main records vaults directory"
+            >
+              <Ionicons name="folder-open" size={32} color={Theme.colors.ink} />
               <Text style={styles.actionText}>All Vaults</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionCard} 
+              onPress={() => router.push('/money/tax')}
+              accessibilityLabel="Tax Planner"
+              accessibilityRole="button"
+              accessibilityHint="Navigates to the tax planning comparison calculator"
+            >
+              <Ionicons name="calculator" size={32} color="#0066cc" />
+              <Text style={styles.actionText}>Tax Planner</Text>
             </TouchableOpacity>
           </View>
 
@@ -562,7 +594,7 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#e8ebe6',
+    backgroundColor: Theme.colors.background,
     padding: 16,
   },
   header: {
@@ -575,13 +607,13 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 28,
     fontWeight: '900',
-    color: '#0e0f0c',
+    color: Theme.colors.ink,
     letterSpacing: -1,
   },
   headerSubtitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#454745',
+    color: Theme.colors.body,
     marginTop: 2,
   },
   alertStrip: {
@@ -620,7 +652,7 @@ const styles = StyleSheet.create({
   cardLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#454745',
+    color: Theme.colors.body,
     textTransform: 'uppercase',
     marginBottom: 8,
   },
@@ -638,14 +670,14 @@ const styles = StyleSheet.create({
   pctBadgeText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#ffffff',
+    color: Theme.colors.white,
   },
   chartWrapper: {
-    backgroundColor: '#ffffff',
+    backgroundColor: Theme.colors.white,
     borderRadius: 24, // rounded.xl
     padding: 16,
     borderWidth: 1.5,
-    borderColor: '#0e0f0c',
+    borderColor: Theme.colors.ink,
     marginBottom: 20,
   },
   chartHeader: {
@@ -657,7 +689,7 @@ const styles = StyleSheet.create({
   chartTitle: {
     fontSize: 15,
     fontWeight: '900',
-    color: '#0e0f0c',
+    color: Theme.colors.ink,
   },
   chartDots: {
     flexDirection: 'row',
@@ -666,11 +698,11 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#868685',
+    backgroundColor: Theme.colors.subtle,
     marginHorizontal: 3,
   },
   chartDotActive: {
-    backgroundColor: '#0e0f0c',
+    backgroundColor: Theme.colors.ink,
     width: 14,
   },
   chartSlide: {
@@ -685,7 +717,7 @@ const styles = StyleSheet.create({
   },
   chartPlaceholderText: {
     fontSize: 13,
-    color: '#868685',
+    color: Theme.colors.subtle,
     fontWeight: '600',
   },
   donutContainer: {
@@ -712,12 +744,12 @@ const styles = StyleSheet.create({
   legendText: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#454745',
+    color: Theme.colors.body,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '900',
-    color: '#0e0f0c',
+    color: Theme.colors.ink,
     marginVertical: 12,
   },
   actionRow: {
@@ -725,11 +757,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   actionCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: Theme.colors.white,
     borderRadius: 16,
-    padding: 16,
+    padding: 12,
     alignItems: 'center',
-    flexBasis: '31%',
+    flexBasis: '23%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.02,
@@ -737,9 +769,9 @@ const styles = StyleSheet.create({
     elevation: 1.5,
   },
   actionText: {
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '700',
-    color: '#0e0f0c',
+    color: Theme.colors.ink,
     marginTop: 8,
   },
 });

@@ -11,14 +11,25 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
+    "test": "turbo test",
     "admin:dev": "npm run dev --workspace=admin",
     "admin:build": "npm run build --workspace=admin",
     "db:push": "npm run db:push --workspace=admin",
     "mobile": "npm run start --workspace=mobile",
     "mobile:android": "npm run android --workspace=mobile",
-    "mobile:ios": "npm run ios --workspace=mobile"
+    "mobile:ios": "npm run ios --workspace=mobile",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@commitlint/cli": "^19.3.0",
+    "@commitlint/config-conventional": "^19.2.2",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.8",
     "turbo": "^2.0.4"
+  },
+  "lint-staged": {
+    "apps/admin/**/*.{js,ts,tsx}": [
+      "eslint --fix"
+    ]
   }
 }

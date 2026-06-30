@@ -15,6 +15,7 @@ const Alert = { alert: showAlert };
 
 import { router } from 'expo-router';
 import * as SecureStore from '../../src/utils/secureStore';
+import { useIsMounted } from '../../src/hooks/useIsMounted';
 import { useAuthStore } from '../../src/store/authStore';
 import {
   getOrCreateSalt,
@@ -54,6 +55,7 @@ export default function OnboardingScreen() {
 
   // Setup states
   const [derivedCryptoKey, setDerivedCryptoKey] = useState<Uint8Array | null>(null);
+  const isMounted = useIsMounted();
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -104,11 +106,14 @@ export default function OnboardingScreen() {
         return;
       }
 
-      // 2. Derive cross-device login key (uses global salt, same on all devices)
-      const loginKey = await deriveLoginKey(trimmedPass);
+      // 2. Parse encrypted DB URL and extract PBKDF2 iterations
+      const blob = JSON.parse(encryptedDbUrl) as { iv: string; data: string; iterations?: number };
+      const iterations = blob.iterations !== undefined ? Number(blob.iterations) : 100_000;
 
-      // 3. Decrypt DB URL locally
-      const blob = JSON.parse(encryptedDbUrl) as { iv: string; data: string };
+      // 3. Derive cross-device login key using KDF iterations version
+      const loginKey = await deriveLoginKey(trimmedPass, iterations);
+
+      // 4. Decrypt DB URL locally
       let resolvedDbUrl: string;
       try {
         resolvedDbUrl = await decrypt(loginKey, blob);
@@ -120,23 +125,27 @@ export default function OnboardingScreen() {
         return;
       }
 
-      // 4. Derive device-local key and store credentials
+      // 5. Derive device-local key and store credentials (use KDF iterations version)
       const salt = await getOrCreateSalt();
-      const deviceKey = await deriveKey(trimmedPass, salt);
+      const deviceKey = await deriveKey(trimmedPass, salt, iterations);
       setDerivedCryptoKey(deviceKey);
 
       await SecureStore.setItemAsync('kk_email', trimmedEmail);
       await storeDBUrl(resolvedDbUrl);
-      await storeVerifyToken(deviceKey);
+      await storeVerifyToken(deviceKey, iterations);
 
       // 5. Move to PIN setup (step 4)
+      if (!isMounted()) return;
       setDbUrl(resolvedDbUrl);
       setDbVerified(true);
       setStep(4);
     } catch (err: any) {
+      if (!isMounted()) return;
       Alert.alert('Login Failed', err.message || 'Could not connect to server. Check your connection.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -156,13 +165,17 @@ export default function OnboardingScreen() {
       setLoading(true);
       try {
         const salt = await getOrCreateSalt();
-        const key = await deriveKey(masterPassword.trim(), salt);
+        const key = await deriveKey(masterPassword.trim(), salt, 600_000);
+        if (!isMounted()) return;
         setDerivedCryptoKey(key);
         setStep(3);
       } catch {
+        if (!isMounted()) return;
         Alert.alert('Error', 'Failed to derive secure key. Please try again.');
       } finally {
-        setLoading(false);
+        if (isMounted()) {
+          setLoading(false);
+        }
       }
     } else if (step === 3) {
       if (!dbVerified) {
@@ -200,7 +213,8 @@ export default function OnboardingScreen() {
       if (!derivedCryptoKey) throw new Error('Crypto key not derived');
 
       const salt = await getOrCreateSalt();
-      const pinKeyBytes = await deriveKey(pin, salt);
+      const iterations = isNewDevice ? await getStoredIterations() : 600_000;
+      const pinKeyBytes = await deriveKey(pin, salt, iterations);
       const masterKeyHex = Buffer.from(derivedCryptoKey).toString('hex');
       const encryptedMasterKey = await encrypt(pinKeyBytes, masterKeyHex);
 
@@ -215,18 +229,18 @@ export default function OnboardingScreen() {
 
       if (!isNewDevice) {
         await storeDBUrl(dbUrl);
-        await storeVerifyToken(derivedCryptoKey);
+        await storeVerifyToken(derivedCryptoKey, 600_000);
 
         // Upload encrypted DB URL to admin server (for future cross-device logins)
         try {
           // Log in first to retrieve and cache JWT session token
           await fetchEncryptedDbUrl(email.trim().toLowerCase(), masterPassword.trim());
 
-          const loginKey = await deriveLoginKey(masterPassword.trim());
+          const loginKey = await deriveLoginKey(masterPassword.trim(), 600_000);
           const encryptedDbUrlBlob = await encrypt(loginKey, dbUrl);
           await uploadEncryptedDbUrl(
             email.trim().toLowerCase(),
-            JSON.stringify(encryptedDbUrlBlob)
+            JSON.stringify({ ...encryptedDbUrlBlob, iterations: 600_000 })
           );
         } catch (uploadErr) {
           // Non-fatal: user can still use the app, just can't use new-device login yet
@@ -282,10 +296,13 @@ export default function OnboardingScreen() {
         Alert.alert('Connection Failed', res.error || 'Failed to establish connection.');
       }
     } catch {
+      if (!isMounted()) return;
       setDbVerified(false);
       Alert.alert('Error', 'An unexpected error occurred while testing connection.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -332,6 +349,9 @@ export default function OnboardingScreen() {
             <TouchableOpacity
               style={styles.buttonPrimary}
               onPress={() => { setMode('full'); handleNextStep(); }}
+              accessibilityLabel="First Time Setup"
+              accessibilityRole="button"
+              accessibilityHint="Starts the step-by-step setup for a new vault"
             >
               <Text style={styles.buttonTextPrimary}>First Time Setup</Text>
             </TouchableOpacity>
@@ -339,6 +359,9 @@ export default function OnboardingScreen() {
             <TouchableOpacity
               style={[styles.buttonSecondary, { marginTop: 12 }]}
               onPress={() => { setMode('new_device'); setStep(2); }}
+              accessibilityLabel="Login on New Device"
+              accessibilityRole="button"
+              accessibilityHint="Retrieves an existing vault database from the server using your master credentials"
             >
               <Text style={styles.buttonTextSecondary}>Login on New Device</Text>
             </TouchableOpacity>
@@ -385,7 +408,14 @@ export default function OnboardingScreen() {
             </Text>
 
             <View style={styles.spacerLarge} />
-            <TouchableOpacity style={styles.buttonPrimary} onPress={handleNextStep} disabled={loading}>
+            <TouchableOpacity 
+              style={styles.buttonPrimary} 
+              onPress={handleNextStep} 
+              disabled={loading}
+              accessibilityLabel={mode === 'new_device' ? 'Login and Retrieve Database' : 'Next Step'}
+              accessibilityRole="button"
+              accessibilityHint="Validates master credentials and proceeds to the next stage"
+            >
               {loading ? (
                 <ActivityIndicator color="#0e0f0c" />
               ) : (
@@ -398,6 +428,9 @@ export default function OnboardingScreen() {
             <TouchableOpacity
               style={styles.btnGhost}
               onPress={() => router.push('/(auth)/recover')}
+              accessibilityLabel="Forgot credentials"
+              accessibilityRole="link"
+              accessibilityHint="Navigates to security lock recovery screen"
             >
               <Text style={styles.btnGhostText}>Forgot credentials?</Text>
             </TouchableOpacity>
@@ -429,6 +462,9 @@ export default function OnboardingScreen() {
                 style={[styles.buttonSecondary, dbVerified && styles.buttonSuccess]}
                 onPress={handleTestConnection}
                 disabled={loading}
+                accessibilityLabel="Test Connection"
+                accessibilityRole="button"
+                accessibilityHint="Tests database connection using the provided URL"
               >
                 {loading ? (
                   <ActivityIndicator color="#0e0f0c" />
@@ -445,6 +481,9 @@ export default function OnboardingScreen() {
               style={[styles.buttonPrimary, !dbVerified && styles.buttonDisabled]}
               onPress={handleNextStep}
               disabled={!dbVerified}
+              accessibilityLabel="Continue"
+              accessibilityRole="button"
+              accessibilityHint="Proceed to PIN configuration step"
             >
               <Text style={styles.buttonTextPrimary}>Continue</Text>
             </TouchableOpacity>
@@ -483,7 +522,14 @@ export default function OnboardingScreen() {
             />
 
             <View style={styles.spacerLarge} />
-            <TouchableOpacity style={styles.buttonPrimary} onPress={handleNextStep} disabled={loading}>
+            <TouchableOpacity 
+              style={styles.buttonPrimary} 
+              onPress={handleNextStep} 
+              disabled={loading}
+              accessibilityLabel={mode === 'new_device' ? 'Set PIN and Finish' : 'Set PIN and Continue'}
+              accessibilityRole="button"
+              accessibilityHint="Saves lock PIN and proceeds"
+            >
               {loading ? (
                 <ActivityIndicator color="#0e0f0c" />
               ) : (
@@ -531,7 +577,14 @@ export default function OnboardingScreen() {
             />
 
             <View style={styles.spacerLarge} />
-            <TouchableOpacity style={styles.buttonPrimary} onPress={handleNextStep} disabled={loading}>
+            <TouchableOpacity 
+              style={styles.buttonPrimary} 
+              onPress={handleNextStep} 
+              disabled={loading}
+              accessibilityLabel="Finish Setup"
+              accessibilityRole="button"
+              accessibilityHint="Creates the primary family profile and enters the vault dashboard"
+            >
               {loading ? (
                 <ActivityIndicator color="#0e0f0c" />
               ) : (

@@ -1,229 +1,226 @@
 import { Platform } from 'react-native';
 import * as SQLite from 'expo-sqlite';
+import alasql from 'alasql';
+import { createLogger } from '../utils/logger';
 
-const getWebTable = (tableName: string): any[] => {
-  if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(`kk_webdb_${tableName}`);
-  return data ? JSON.parse(data) : [];
-};
+const log = createLogger('db');
 
-const saveWebTable = (tableName: string, data: any[]): void => {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(`kk_webdb_${tableName}`, JSON.stringify(data));
-};
+// ─── Table Name Whitelist ─────────────────────────────────────────────────────
+// All table names used in dynamic SQL queries must be in this set.
+// This prevents SQL injection via table name interpolation.
 
-function evaluateWhere(row: any, conditionSql: string, params: any[]): boolean {
-  const sql = conditionSql.replace(/\s+/g, ' ').trim();
-  
-  if (sql.includes('local_id = ?') && sql.includes('deleted_at IS NULL')) {
-    const localId = params[0];
-    return row.local_id === localId && !row.deleted_at;
+export const ALLOWED_TABLES = new Set([
+  'family_members',
+  'income_entries',
+  'expense_entries',
+  'bank_accounts',
+  'lic_policies',
+  'insurance_policies',
+  'loans',
+  'documents',
+  'fdrd_entries',
+  'property',
+  'savings_goals',
+  'investments',
+  'sync_log',
+  'sync_conflicts',
+  'app_settings',
+]);
+
+/**
+ * Validates that a table name is in the allowed whitelist.
+ * Throws if the table name is not allowed, preventing SQL injection
+ * via ${table} interpolation in dynamic queries.
+ */
+export function assertTableAllowed(table: string): void {
+  if (!ALLOWED_TABLES.has(table)) {
+    throw new Error(`Table "${table}" is not in the allowed list and cannot be used in queries.`);
   }
-  if (sql.includes('local_id = ?')) {
-    const localId = params[0];
-    return row.local_id === localId;
-  }
-  if (sql.includes('key = ?')) {
-    const key = params[0];
-    return row.key === key;
-  }
-  if (sql.includes('id = ?')) {
-    const id = params[0];
-    return Number(row.id) === Number(id) || row.local_id === id; 
-  }
-  if (sql.includes('local_id IN')) {
-    return params.includes(row.local_id);
-  }
-  if (sql.includes('resolved = 0')) {
-    return !row.resolved || Number(row.resolved) === 0;
-  }
-  
-  let match = true;
-  if (sql.includes('deleted_at IS NULL')) {
-    match = match && !row.deleted_at;
-  }
-  if (sql.includes('due_date IS NOT NULL')) {
-    match = match && row.due_date !== null && row.due_date !== undefined;
-  }
-  if (sql.includes('renewal_date IS NOT NULL')) {
-    match = match && row.renewal_date !== null && row.renewal_date !== undefined;
-  }
-  if (sql.includes('expiry_date IS NOT NULL')) {
-    match = match && row.expiry_date !== null && row.expiry_date !== undefined;
-  }
-  if (sql.includes('error IS NULL')) {
-    match = match && !row.error;
-  }
-  if (sql.includes("sync_status = 'pending'")) {
-    match = match && row.sync_status === 'pending';
-  }
-  return match;
 }
 
-function sortData(data: any[], sql: string): any[] {
-  const sorted = [...data];
-  if (sql.includes('ORDER BY id DESC')) {
-    sorted.sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
-  } else if (sql.includes('ORDER BY synced_at DESC')) {
-    sorted.sort((a, b) => new Date(b.synced_at || 0).getTime() - new Date(a.synced_at || 0).getTime());
+const getTableName = (sql: string): string | null => {
+  const clean = sql.replace(/\s+/g, ' ').trim().toUpperCase();
+  
+  if (clean.includes('INSERT INTO')) {
+    const m = sql.match(/INSERT\s+INTO\s+(\w+)/i);
+    return m ? m[1] : null;
   }
-  return sorted;
+  if (clean.includes('INSERT OR REPLACE INTO')) {
+    const m = sql.match(/INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)/i);
+    return m ? m[1] : null;
+  }
+  if (clean.includes('INSERT OR IGNORE INTO')) {
+    const m = sql.match(/INSERT\s+OR\s+IGNORE\s+INTO\s+(\w+)/i);
+    return m ? m[1] : null;
+  }
+  if (clean.includes('UPDATE')) {
+    const m = sql.match(/UPDATE\s+(\w+)/i);
+    return m ? m[1] : null;
+  }
+  if (clean.includes('DELETE FROM')) {
+    const m = sql.match(/DELETE\s+FROM\s+(\w+)/i);
+    return m ? m[1] : null;
+  }
+  return null;
+};
+
+const saveWebTable = (tableName: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const rows = alasql(`SELECT * FROM ${tableName}`);
+    localStorage.setItem(`kk_webdb_${tableName}`, JSON.stringify(rows));
+  } catch (err) {
+    log.error(`Failed to save table ${tableName} to localStorage:`, err);
+  }
+};
+
+const escapeSqlKeywords = (sql: string): string => {
+  return sql
+    .replace(/(?<!\b(?:primary|foreign)\s+)\bkey\b/gi, '[key]')
+    .replace(/\bvalue\b/gi, '[value]');
+};
+
+export interface DatabaseConnection {
+  execSync(sql: string): void;
+  runSync(sql: string, params?: unknown[]): void;
+  getAllSync<T>(sql: string, params?: unknown[]): T[];
+  getFirstSync<T>(sql: string, params?: unknown[]): T | null;
 }
 
 const webDbMock = {
   execSync(sql: string) {
-    const cleanSql = sql.replace(/\s+/g, ' ').trim();
-    const createTableMatch = cleanSql.match(/CREATE TABLE IF NOT EXISTS (\w+)/i);
-    if (createTableMatch) {
-      const tableName = createTableMatch[1];
-      if (typeof window !== 'undefined' && !localStorage.getItem(`kk_webdb_${tableName}`)) {
-        saveWebTable(tableName, []);
+    const statements = sql.split(';').map(s => s.trim()).filter(Boolean);
+    for (const stmt of statements) {
+      const cleanStmt = stmt.replace(/\s+/g, ' ').trim();
+      if (cleanStmt.toUpperCase().startsWith('PRAGMA') || cleanStmt.toUpperCase().startsWith('CREATE INDEX')) {
+        continue;
       }
-    }
-  },
 
-  runSync(sql: string, params: any[] = []) {
-    const cleanSql = sql.replace(/\s+/g, ' ').trim();
-
-    // 1. DELETE
-    const deleteMatch = cleanSql.match(/DELETE\s+FROM\s+(\w+)\s+WHERE\s+(.+)/i);
-    if (deleteMatch) {
-      const tableName = deleteMatch[1];
-      const condition = deleteMatch[2];
-      let tableData = getWebTable(tableName);
-      tableData = tableData.filter(row => !evaluateWhere(row, condition, params));
-      saveWebTable(tableName, tableData);
-      return;
-    }
-
-    // 2. INSERT / REPLACE
-    const insertMatch = cleanSql.match(/INSERT\s+(?:OR\s+REPLACE\s+)?INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
-    if (insertMatch) {
-      const tableName = insertMatch[1];
-      const fields = insertMatch[2].split(',').map(f => f.trim());
-      const valuesList = insertMatch[3].split(',').map(v => v.trim());
-      const row: any = {};
-      
-      let tableData = getWebTable(tableName);
-      const currentMaxId = tableData.reduce((max, r) => Math.max(max, Number(r.id) || 0), 0);
-      row.id = currentMaxId + 1;
-
-      let paramIndex = 0;
-      fields.forEach((field, index) => {
-        const valueExpr = valuesList[index];
-        if (valueExpr === '?') {
-          row[field] = params[paramIndex++];
-        } else if (valueExpr) {
-          row[field] = valueExpr.replace(/['"]/g, '');
-        }
-      });
-      
-      if (row.local_id) {
-        tableData = tableData.filter(r => r.local_id !== row.local_id);
-      } else if (row.key) {
-        tableData = tableData.filter(r => r.key !== row.key);
+      try {
+        alasql(escapeSqlKeywords(cleanStmt));
+      } catch (err) {
+        log.error('alasql execSync error:', err, 'SQL:', cleanStmt);
       }
-      tableData.push(row);
-      saveWebTable(tableName, tableData);
-      return;
-    }
 
-    // 3. UPDATE
-    const updateMatch = cleanSql.match(/UPDATE\s+(\w+)\s+SET\s+(.+?)\s+WHERE\s+(.+)/i);
-    if (updateMatch) {
-      const tableName = updateMatch[1];
-      const setClause = updateMatch[2];
-      const whereClause = updateMatch[3];
-      const assignments = setClause.split(',').map(s => s.trim());
-      
-      let tableData = getWebTable(tableName);
-      
-      const setPlaceholderCount = (setClause.match(/\?/g) || []).length;
-      const setParams = params.slice(0, setPlaceholderCount);
-      const whereParams = params.slice(setPlaceholderCount);
-
-      tableData = tableData.map(row => {
-        if (evaluateWhere(row, whereClause, whereParams)) {
-          let pIdx = 0;
-          assignments.forEach(assign => {
-            const parts = assign.split('=').map(x => x.trim());
-            const col = parts[0];
-            const val = parts[1];
-            if (val === '?') {
-              row[col] = setParams[pIdx++];
-            } else {
-              row[col] = val.replace(/['"]/g, '');
+      const createTableMatch = cleanStmt.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i);
+      if (createTableMatch) {
+        const tableName = createTableMatch[1];
+        if (typeof window !== 'undefined') {
+          const stored = localStorage.getItem(`kk_webdb_${tableName}`);
+          if (stored) {
+            try {
+              const rows = JSON.parse(stored) as Record<string, unknown>[];
+              rows.forEach((row: Record<string, unknown>) => {
+                alasql(escapeSqlKeywords(`INSERT INTO ${tableName} VALUES ?`), [row]);
+              });
+            } catch (err) {
+              log.error(`Failed to hydrate table ${tableName} from localStorage:`, err);
             }
-          });
+          }
         }
-        return row;
-      });
-      saveWebTable(tableName, tableData);
-      return;
-    }
-  },
-
-  getAllSync<T>(sql: string, params: any[] = []): T[] {
-    const cleanSql = sql.replace(/\s+/g, ' ').trim();
-    const fromMatch = cleanSql.match(/FROM\s+(\w+)/i);
-    if (!fromMatch) return [] as T[];
-    const tableName = fromMatch[1];
-    const tableData = getWebTable(tableName);
-    
-    const whereMatch = cleanSql.match(/WHERE\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|$)/i);
-    if (whereMatch) {
-      const condition = whereMatch[1];
-      let filtered = tableData.filter(row => evaluateWhere(row, condition, params));
-      
-      if (cleanSql.includes('ORDER BY')) {
-        filtered = sortData(filtered, cleanSql);
       }
-      return filtered as any as T[];
     }
-    
-    let result = tableData;
-    if (cleanSql.includes('ORDER BY')) {
-      result = sortData(result, cleanSql);
-    }
-    return result as any as T[];
   },
 
-  getFirstSync<T>(sql: string, params: any[] = []): T | null {
-    const cleanSql = sql.replace(/\s+/g, ' ').trim();
-    const fromMatch = cleanSql.match(/FROM\s+(\w+)/i);
-    if (!fromMatch) return null;
-    const tableName = fromMatch[1];
-    let tableData = getWebTable(tableName);
+  runSync(sql: string, params: unknown[] = []) {
+    let cleanSql = sql.replace(/\s+/g, ' ').trim();
     
-    const whereMatch = cleanSql.match(/WHERE\s+(.+?)(?:\s+ORDER\s+BY|\s+LIMIT|$)/i);
-    if (whereMatch) {
-      const condition = whereMatch[1];
-      tableData = tableData.filter(row => evaluateWhere(row, condition, params));
+    // Translate INSERT OR REPLACE
+    if (cleanSql.toUpperCase().includes('INSERT OR REPLACE INTO')) {
+      const match = cleanSql.match(/INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+      if (match) {
+        const tableName = match[1];
+        const cols = match[2].split(',').map(c => c.trim());
+        const localIdIndex = cols.indexOf('local_id');
+        const keyIndex = cols.indexOf('key');
+
+        if (localIdIndex !== -1) {
+          const localId = params[localIdIndex];
+          const exists = alasql(escapeSqlKeywords(`SELECT 1 FROM ${tableName} WHERE local_id = ?`), [localId]) as unknown[];
+          if (exists && exists.length > 0) {
+            const setClauses = cols.filter(c => c !== 'local_id').map(c => `${c} = ?`).join(', ');
+            const updateParams = params.filter((_, idx) => idx !== localIdIndex);
+            updateParams.push(localId);
+            alasql(escapeSqlKeywords(`UPDATE ${tableName} SET ${setClauses} WHERE local_id = ?`), updateParams);
+            saveWebTable(tableName);
+            return;
+          }
+        } else if (keyIndex !== -1) {
+          const keyVal = params[keyIndex];
+          const exists = alasql(escapeSqlKeywords(`SELECT 1 FROM ${tableName} WHERE key = ?`), [keyVal]) as unknown[];
+          if (exists && exists.length > 0) {
+            const setClauses = cols.filter(c => c !== 'key').map(c => `${c} = ?`).join(', ');
+            const updateParams = params.filter((_, idx) => idx !== keyIndex);
+            updateParams.push(keyVal);
+            alasql(escapeSqlKeywords(`UPDATE ${tableName} SET ${setClauses} WHERE key = ?`), updateParams);
+            saveWebTable(tableName);
+            return;
+          }
+        }
+      }
+      cleanSql = cleanSql.replace(/INSERT\s+OR\s+REPLACE\s+INTO/i, 'INSERT INTO');
     }
-    
-    if (cleanSql.includes('ORDER BY')) {
-      tableData = sortData(tableData, cleanSql);
+
+    // Translate INSERT OR IGNORE
+    if (cleanSql.toUpperCase().includes('INSERT OR IGNORE INTO')) {
+      const match = cleanSql.match(/INSERT\s+OR\s+IGNORE\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+      if (match) {
+        const tableName = match[1];
+        const cols = match[2].split(',').map(c => c.trim());
+        const localIdIndex = cols.indexOf('local_id');
+        if (localIdIndex !== -1) {
+          const localId = params[localIdIndex];
+          const exists = alasql(escapeSqlKeywords(`SELECT 1 FROM ${tableName} WHERE local_id = ?`), [localId]) as unknown[];
+          if (exists && exists.length > 0) {
+            return;
+          }
+        }
+      }
+      cleanSql = cleanSql.replace(/INSERT\s+OR\s+IGNORE\s+INTO/i, 'INSERT INTO');
     }
-    
-    if (cleanSql.includes('COUNT(*)')) {
-      const count = tableData.length;
-      return { count } as any as T;
+
+    try {
+      alasql(escapeSqlKeywords(cleanSql), params);
+      
+      const tableName = getTableName(sql);
+      if (tableName) {
+        saveWebTable(tableName);
+      }
+    } catch (err) {
+      log.error('alasql runSync error:', err, 'SQL:', sql, 'params:', params);
     }
-    
-    return (tableData[0] || null) as T | null;
+  },
+
+  getAllSync<T>(sql: string, params: unknown[] = []): T[] {
+    try {
+      return alasql(escapeSqlKeywords(sql), params) as T[];
+    } catch (err) {
+      log.error('alasql getAllSync error:', err, 'SQL:', sql, 'params:', params);
+      return [];
+    }
+  },
+
+  getFirstSync<T>(sql: string, params: unknown[] = []): T | null {
+    try {
+      const rows = alasql(escapeSqlKeywords(sql), params) as T[];
+      return (rows[0] || null) as T | null;
+    } catch (err) {
+      log.error('alasql getFirstSync error:', err, 'SQL:', sql, 'params:', params);
+      return null;
+    }
   }
 };
 
-export const db = Platform.OS === 'web'
-  ? webDbMock as any
-  : SQLite.openDatabaseSync('kutumbkosh.db');
+export const db: DatabaseConnection = Platform.OS === 'web'
+  ? (webDbMock as unknown as DatabaseConnection)
+  : (SQLite.openDatabaseSync('kutumbkosh.db') as unknown as DatabaseConnection);
 
 export function initializeDB(): void {
   db.execSync(`PRAGMA journal_mode = WAL;`);
   db.execSync(`PRAGMA foreign_keys = ON;`);
 
   // Template for all tables — same structure repeated for each entity
-  const createTable = (name: string, extraIndexCols = '') => `
+  const createTable = (name: string, extraIndexCols = '', extraIndexCommands = '') => `
     CREATE TABLE IF NOT EXISTS ${name} (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       local_id    TEXT UNIQUE NOT NULL,
@@ -237,19 +234,49 @@ export function initializeDB(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_${name}_sync ON ${name}(sync_status);
     CREATE INDEX IF NOT EXISTS idx_${name}_deleted ON ${name}(deleted_at);
+    ${extraIndexCommands}
   `;
 
   db.execSync(createTable('family_members'));
-  db.execSync(createTable('income_entries', 'entry_date TEXT, member_idx TEXT,'));
-  db.execSync(createTable('expense_entries', 'entry_date TEXT, category_idx TEXT,'));
+  db.execSync(createTable(
+    'income_entries',
+    'entry_date TEXT, member_idx TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_income_sync_date ON income_entries(sync_status, entry_date); CREATE INDEX IF NOT EXISTS idx_income_date ON income_entries(entry_date);'
+  ));
+  db.execSync(createTable(
+    'expense_entries',
+    'entry_date TEXT, category_idx TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_expense_sync_date ON expense_entries(sync_status, entry_date); CREATE INDEX IF NOT EXISTS idx_expense_date ON expense_entries(entry_date);'
+  ));
   db.execSync(createTable('bank_accounts'));
-  db.execSync(createTable('lic_policies', 'due_date TEXT,'));
-  db.execSync(createTable('insurance_policies', 'renewal_date TEXT,'));
+  db.execSync(createTable(
+    'lic_policies',
+    'due_date TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_lic_due ON lic_policies(due_date);'
+  ));
+  db.execSync(createTable(
+    'insurance_policies',
+    'renewal_date TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_ins_ren ON insurance_policies(renewal_date);'
+  ));
   db.execSync(createTable('loans'));
-  db.execSync(createTable('documents', 'expiry_date TEXT,'));
-  db.execSync(createTable('fdrd_entries', 'maturity_date TEXT,'));
+  db.execSync(createTable(
+    'documents',
+    'expiry_date TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_doc_exp ON documents(expiry_date);'
+  ));
+  db.execSync(createTable(
+    'fdrd_entries',
+    'maturity_date TEXT,',
+    'CREATE INDEX IF NOT EXISTS idx_fd_mat ON fdrd_entries(maturity_date);'
+  ));
   db.execSync(createTable('property'));
   db.execSync(createTable('savings_goals'));
+  db.execSync(createTable(
+    'investments',
+    'asset_type TEXT, ticker TEXT, quantity REAL, purchase_price REAL, current_price REAL,',
+    'CREATE INDEX IF NOT EXISTS idx_investments_type ON investments(asset_type);'
+  ));
 
   db.execSync(`
     CREATE TABLE IF NOT EXISTS sync_log (
@@ -291,6 +318,6 @@ export function initializeDB(): void {
       db.runSync('INSERT INTO app_settings (key, value) VALUES (?, ?)', ['monthly_budget_limit', '25000']);
     }
   } catch (err) {
-    console.log('Failed to seed default settings:', err);
+    log.warn('Failed to seed default settings:', err);
   }
 }

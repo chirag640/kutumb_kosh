@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../../src/store/authStore';
 import { db } from '../../../src/db';
+import { useIsMounted } from '../../../src/hooks/useIsMounted';
 
 interface Conflict {
   id: number;
@@ -29,6 +30,7 @@ export default function ConflictResolutionScreen() {
   const { cryptoKey } = useAuthStore();
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
   const [loading, setLoading] = useState(false);
+  const isMounted = useIsMounted();
 
   useEffect(() => {
     loadConflicts();
@@ -41,8 +43,8 @@ export default function ConflictResolutionScreen() {
          FROM sync_conflicts WHERE resolved = 0`
       ) as Conflict[];
       setConflicts(rows);
-    } catch (e) {
-      console.log('Error querying conflicts', e);
+    } catch {
+      // Silently handle — conflicts array stays empty
     }
   };
 
@@ -66,9 +68,12 @@ export default function ConflictResolutionScreen() {
   const handleKeepLocal = async (conflictId: number) => {
     try {
       db.runSync(`DELETE FROM sync_conflicts WHERE id = ?`, [conflictId]);
-      Alert.alert('Success', 'Local version kept. It will be pushed to the cloud on next sync.');
-      loadConflicts();
+      if (isMounted()) {
+        Alert.alert('Success', 'Local version kept. It will be pushed to the cloud on next sync.');
+        loadConflicts();
+      }
     } catch (e) {
+      if (!isMounted()) return;
       Alert.alert('Error', 'Failed to resolve conflict.');
     }
   };
@@ -111,12 +116,17 @@ export default function ConflictResolutionScreen() {
       // Remove from conflict table
       db.runSync(`DELETE FROM sync_conflicts WHERE id = ?`, [conflict.id]);
 
-      Alert.alert('Success', 'Cloud version restored locally.');
-      loadConflicts();
+      if (isMounted()) {
+        Alert.alert('Success', 'Cloud version restored locally.');
+        loadConflicts();
+      }
     } catch (e: any) {
+      if (!isMounted()) return;
       Alert.alert('Error', e.message || 'Failed to apply remote version.');
     } finally {
-      setLoading(false);
+      if (isMounted()) {
+        setLoading(false);
+      }
     }
   };
 
@@ -127,8 +137,8 @@ export default function ConflictResolutionScreen() {
     try {
       localFields = JSON.parse(item.local_data);
       remoteFields = JSON.parse(item.remote_data);
-    } catch (e) {
-      console.log('Failed to parse conflict data fields', e);
+    } catch {
+      // Parsing failed — show empty fields
     }
 
     const allKeys = Array.from(new Set([...Object.keys(localFields), ...Object.keys(remoteFields)]))
